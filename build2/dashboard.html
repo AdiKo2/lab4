@@ -122,7 +122,7 @@ main { flex: 1; display: flex; min-height: 0; }
 
 .pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
 .prose { white-space: pre-wrap; overflow-wrap: anywhere; }
-.clamp { max-height: 8.6em; overflow: hidden; position: relative; }
+.clamp { max-height: 8.7em; overflow: hidden; position: relative; }
 .clamp::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; background: linear-gradient(transparent, var(--fade, var(--panel))); }
 .long > button.more { margin-top: 4px; font-size: 11px; padding: 1px 8px; }
 .sysblock { margin-bottom: 12px; }
@@ -323,7 +323,7 @@ function copyBtn(getText, label) {
 const state = {
   ex: new Map(),        // id -> exchange
   tools: {},            // tool_use id -> pair entry
-  bufferSize: 200,
+  evicted: 0,           // exchanges the ring buffer dropped since the last clear
   rev: 0, toolsRev: 0,
   paused: false, pending: [],
   filter: '', hideChecks: true,
@@ -359,9 +359,21 @@ function addEx(x) {
   x.timing = x.timing || {};
   x.request_headers = x.request_headers || {};
   x.response_headers = x.response_headers || {};
+  if (x.model_call === undefined) x.model_call = guessModelCall(x);
   x.rev = 0;
   state.ex.set(x.id, x);
-  while (state.ex.size > state.bufferSize) state.ex.delete(state.ex.keys().next().value);
+}
+function guessModelCall(x) {
+  const b = x.request_body;
+  if (x.method !== 'POST' || !b || typeof b !== 'object' || String(x.path).includes('count_tokens')) return false;
+  return Array.isArray(b.messages) || (Array.isArray(b.input) && !!b.model);
+}
+// Same rule as the server: drop pairs whose two exchanges are both gone.
+function pruneTools() {
+  for (const k of Object.keys(state.tools)) {
+    const e = state.tools[k];
+    if (!state.ex.has(e.call_exchange) && !state.ex.has(e.result_exchange)) delete state.tools[k];
+  }
 }
 function upd(id, fn) {
   const ex = state.ex.get(id);
@@ -373,7 +385,7 @@ function applyEvent(name, d) {
   switch (name) {
     case 'snapshot':
       state.ex = new Map();
-      state.bufferSize = d.buffer_size || 200;
+      state.evicted = d.evicted || 0;
       for (const x of d.exchanges || []) addEx(x);
       state.tools = d.tools || {};
       state.toolsRev++;
@@ -390,37 +402,39 @@ function applyEvent(name, d) {
       });
       break;
     case 'exchange_done':
+    case 'exchange_error':   // exactly one of these ends each exchange
       upd(d.id, (ex) => {
         ex.ended_at = d.ended_at;
+        if (name === 'exchange_error') ex.error = d.message;
         if (d.status != null) ex.status = d.status;
         if (d.assembled) ex.assembled = d.assembled;
         ex.assembled.content = ex.assembled.content || [];
         if (d.timing) ex.timing = d.timing;
-        ex.cost_usd = d.cost_usd;
-        ex.error_info = d.error_info;
-        ex.response_body = d.response_body;
+        if ('cost_usd' in d) ex.cost_usd = d.cost_usd;
+        if ('error_info' in d) ex.error_info = d.error_info;
+        if ('response_body' in d) ex.response_body = d.response_body;
       });
       break;
-    case 'exchange_error':
-      upd(d.id, (ex) => { ex.error = d.message; ex.ended_at = d.ended_at; if (d.timing) ex.timing = d.timing; });
+    case 'exchange_evicted':
+      if (state.ex.delete(d.id)) { state.evicted++; pruneTools(); state.toolsRev++; }
       break;
     case 'exchange_meta':
       upd(d.id, (ex) => { for (const k of Object.keys(d)) if (k !== 'id') ex[k] = d[k]; });
       break;
     case 'tool_paired':
-    case 'tool_update':
+    case 'tool_updated':
       if (d.entry) state.tools[d.tool_use_id] = d.entry;
       state.toolsRev++;
       break;
     case 'cleared':
-      state.ex = new Map(); state.tools = {}; state.toolsRev++;
+      state.ex = new Map(); state.tools = {}; state.evicted = 0; state.toolsRev++;
       break;
   }
   state.rev++;
 }
 
 const EVENTS = ['snapshot', 'exchange_started', 'exchange_response', 'exchange_delta', 'exchange_done',
-  'exchange_error', 'exchange_meta', 'tool_paired', 'tool_update', 'cleared'];
+  'exchange_error', 'exchange_meta', 'exchange_evicted', 'tool_paired', 'tool_updated', 'cleared'];
 function connect() {
   const es = new EventSource('/events');
   es.onopen = () => { state.live = true; renderConn(); };
@@ -429,7 +443,9 @@ function connect() {
     es.addEventListener(name, (ev) => {
       let data;
       try { data = JSON.parse(ev.data); } catch (e) { console.warn('bad event', name, e); return; }
-      if (state.paused) { state.pending.push([name, data]); renderPause(); return; }
+      // Clear applies at once, even while paused, and drops the held events.
+      if (name === 'cleared') { state.pending = []; renderPause(); }
+      else if (state.paused) { state.pending.push([name, data]); renderPause(); return; }
       applyEvent(name, data);
       schedule();
     });
@@ -457,28 +473,33 @@ function durationMs(ex) {
   const t = Date.parse(ex.started_at);
   return isNaN(t) ? null : Date.now() - t;
 }
+// §6.5: output / (total duration - time to first token).
 function tokPerSec(ex) {
   const t = tok(ex), tm = ex.timing || {};
-  if (!t || !t.output || !tm.total_ms) return null;
-  // Speed while tokens stream. When the reply arrives in one burst (e.g. after
-  // hidden thinking) that window is too short to measure, so use the total.
-  const win = tm.ttft_ms != null ? tm.total_ms - tm.ttft_ms : 0;
-  return t.output / ((win >= 250 ? win : tm.total_ms) / 1000);
+  if (!t || tm.total_ms == null || tm.ttft_ms == null || tm.total_ms <= tm.ttft_ms) return null;
+  return t.output / ((tm.total_ms - tm.ttft_ms) / 1000);
 }
-function isFailed(ex) { return !!(ex.error || ex.error_info || (ex.status != null && ex.status >= 400)); }
+// `error` is set for every failed exchange (§4). A 4xx/5xx counts as soon as
+// its status arrives, before the body ends it.
+const httpFailed = (ex) => ex.status != null && ex.status >= 400;
+function isFailed(ex) { return !!(ex.error || httpFailed(ex)); }
 function errorReason(ex) {
-  if (ex.error) return 'proxy error: ' + ex.error;
+  if (!isFailed(ex)) return null;
   const info = ex.error_info;
-  if (!(ex.status >= 400) && !info) return null;
-  let s = ex.status != null ? String(ex.status) : 'stream error';
-  if (info && (info.type || info.message)) s += ' ' + [info.type, info.message].filter(Boolean).join(': ');
-  else if (ex.status === 429) s += ' rate limited';
-  else if (ex.reason) s += ' ' + ex.reason;
+  let s;
+  if (httpFailed(ex)) {
+    s = String(ex.status);
+    if (info && (info.type || info.message)) s += ' ' + [info.type, info.message].filter(Boolean).join(': ');
+    else if (ex.status === 429) s += ' rate limited';
+    else if (ex.reason) s += ' ' + ex.reason;
+  } else {
+    s = ex.error;
+  }
   const ra = (info && info.retry_after) || hdr(ex.response_headers, 'retry-after');
   if (ra) s += ` · retry after ${ra}${/^\d+(\.\d+)?$/.test(String(ra)) ? 's' : ''}`;
   return s;
 }
-function errorKey(ex) { return ex.error ? 'proxy' : String(ex.status != null && ex.status >= 400 ? ex.status : 'stream'); }
+function errorKey(ex) { return httpFailed(ex) ? String(ex.status) : ex.status == null ? 'proxy' : 'stream'; }
 
 // Splits a request body into system / tools / messages / other params.
 // Anthropic Messages and OpenAI Responses (Codex) bodies both map onto this.
@@ -565,38 +586,48 @@ function stripCache(v) {
   }
   return v;
 }
+// Matching rules (§6.7): ignore cache_control, skip the per-request billing
+// header in `system`, and treat a plain string like a single text block
+// (normalize() already turns strings into text blocks).
+const isBillingHeader = (b) => b && typeof b.text === 'string' && b.text.startsWith('x-anthropic-billing-header');
 const canonCache = new WeakMap();
 function canon(ex) {
   if (canonCache.has(ex)) return canonCache.get(ex);
   const n = normalize(ex);
   const c = {
-    system: safeStringify(stripCache(n.system)),
+    system: safeStringify(stripCache(n.system.filter((b) => !isBillingHeader(b)))),
     tools: safeStringify(stripCache(n.tools.map((t) => t.raw || t))),
-    msgs: n.messages.map((m) => safeStringify(stripCache(m.raw))),
+    msgs: n.messages.map((m) => safeStringify(stripCache({ role: m.role, content: m.content }))),
   };
   canonCache.set(ex, c);
   return c;
 }
-// The previous request of the same conversation: same system prompt, and its
-// messages are a prefix of this one's.
+// The previous request: the nearest earlier model call (not a failed attempt)
+// whose messages are a prefix of this one's. If none is, the one sharing the
+// longest prefix, with a warning that older messages changed.
 function findPrevious(ex) {
   const me = canon(ex), kind = normalize(ex).kind;
   if (!me.msgs.length) return null;
-  let best = null, bestLoose = null;
+  let full = null, fullLoose = null, partial = null, partialK = 0;
   const ids = [...state.ex.keys()].filter((id) => id < ex.id).sort((a, b) => b - a);
   for (const id of ids) {
     const o = state.ex.get(id);
-    if (isCheck(o) || normalize(o).kind !== kind) continue;
+    if (!o.model_call || isFailed(o) || normalize(o).kind !== kind) continue;
     const c = canon(o);
-    if (!c.msgs.length || c.msgs.length > me.msgs.length) continue;
+    if (!c.msgs.length) continue;
     let k = 0;
-    while (k < c.msgs.length && c.msgs[k] === me.msgs[k]) k++;
-    if (k !== c.msgs.length) continue;
-    if (c.system === me.system) { best = o; break; }
-    if (!bestLoose) bestLoose = o;
+    while (k < c.msgs.length && k < me.msgs.length && c.msgs[k] === me.msgs[k]) k++;
+    const sameSystem = c.system === me.system;
+    if (k === c.msgs.length) {
+      if (sameSystem) { full = o; break; }
+      if (!fullLoose) fullLoose = o;
+    } else if (sameSystem && k > partialK) { partial = o; partialK = k; }
   }
-  const prev = best || bestLoose;
-  return prev ? { prev, sameSystem: !!best, k: canon(prev).msgs.length } : null;
+  if (full || fullLoose) {
+    const prev = full || fullLoose;
+    return { prev, sameSystem: !!full, k: canon(prev).msgs.length, changed: false };
+  }
+  return partial ? { prev: partial, sameSystem: true, k: partialK, changed: true } : null;
 }
 
 // ========================================================= display components
@@ -775,11 +806,15 @@ function blockView(ex, b, key, ctx) {
       return blk(t, cc, jsonView(b, key));
   }
 }
+// Tool input arrives in pieces; show its size until it is complete.
+function receiving(partial) {
+  return h('div', { class: 'partial' }, h('span', { class: 'spin' }), ` receiving input… ${fmtInt(partial.length)} chars`);
+}
 function toolUseView(ex, b, key, ctx, cc) {
   const e = state.tools[b.id];
   return blk('tool_use', [h('b', { class: 'mono' }, b.name || '?'), h('code', { class: 'muted' }, b.id || ''), statusChip(e), cc,
     e && e.result_exchange != null ? link(`result in request #${e.result_exchange} →`, msgHash(e.result_exchange, e.result_message), 'lnk') : null],
-  b._partial_json != null ? h('div', { class: 'pre partial' }, 'assembling input… ' + b._partial_json) : jsonView(b.input == null ? {} : b.input, key + ':in'));
+  b._partial_json != null ? receiving(b._partial_json) : jsonView(b.input == null ? {} : b.input, key + ':in'));
 }
 function resultContent(c, key, defOpen) {
   if (c == null || (Array.isArray(c) && !c.length) || c === '') return h('div', { class: 'muted' }, '(empty)');
@@ -821,7 +856,7 @@ function pairView(tid, key, from) {
   const input = e.input !== undefined && e.input !== null ? e.input : call.input;
   const left = h('div', { class: 'pair-call' },
     h('div', { class: 'pair-label' }, badge('tool_use'), h('b', { class: 'mono' }, name), h('code', { class: 'muted' }, tid || '')),
-    partial != null ? h('div', { class: 'pre partial' }, 'assembling input… ' + partial) : jsonView(input == null ? {} : input, key + ':in'));
+    partial != null ? receiving(partial) : jsonView(input == null ? {} : input, key + ':in'));
   let right;
   if (res) {
     right = h('div', { class: 'pair-result' + (res.is_error ? ' err' : '') },
@@ -872,7 +907,7 @@ function guard(where, fn) {
 let listKey = '', listAt = 0, listTimer = null;
 function renderListAndSummary() {
   const r = state.route;
-  const key = `${state.ex.size}|${state.filter}|${state.hideChecks}|${r.view}:${r.id}|${state.paused}`;
+  const key = `${state.ex.size}|${state.filter}|${state.hideChecks}|${r.view}:${r.id}|${state.paused}|${state.evicted}`;
   const now = performance.now();
   if (key === listKey && now - listAt < 200) {
     if (!listTimer) listTimer = setTimeout(() => { listTimer = null; schedule(); }, 210);
@@ -916,15 +951,19 @@ function visibleExchanges() {
 }
 
 // ---- session summary
+// Session = what is in the buffer now, since the last clear (§6.5). Checks
+// (requests with no body) are only counted; they add nothing to other totals.
+// Failed model calls count, with whatever usage they report.
 function sessionStats() {
-  const s = { n: 0, prompt: 0, output: 0, cacheRead: 0, cacheWrite: 0, input: 0, cost: 0, unpriced: 0,
+  const s = { calls: 0, checks: 0, prompt: 0, output: 0, cacheRead: 0, cacheWrite: 0, input: 0, cost: 0, unpriced: 0,
     durSum: 0, durN: 0, first: null, last: null, errors: {} };
-  for (const ex of apiExchanges()) {
-    s.n++;
+  for (const ex of state.ex.values()) {
+    if (isCheck(ex)) { s.checks++; continue; }
+    if (ex.model_call) s.calls++;
     const t = tok(ex);
     if (t) { s.prompt += t.prompt; s.output += t.output; s.cacheRead += t.cacheRead; s.cacheWrite += t.cacheWrite; s.input += t.input; }
     if (ex.cost_usd != null) s.cost += ex.cost_usd; else if (t && ex.ended_at) s.unpriced++;
-    if (ex.timing.total_ms != null) { s.durSum += ex.timing.total_ms; s.durN++; }
+    if (ex.model_call && ex.timing.total_ms != null) { s.durSum += ex.timing.total_ms; s.durN++; }
     const st = Date.parse(ex.started_at), en = ex.ended_at ? Date.parse(ex.ended_at) : Date.now();
     if (s.first == null || st < s.first) s.first = st;
     if (s.last == null || en > s.last) s.last = en;
@@ -942,19 +981,22 @@ function renderSummary() {
   const el = $('#summary');
   el.replaceChildren();
   addKids(el, [
-    statBox('requests', fmtInt(s.n), '#/stats/requests'),
+    statBox('model calls', fmtInt(s.calls), '#/stats/requests'),
+    statBox('checks', fmtInt(s.checks), '#/stats/checks', '', 'requests with no body, such as HEAD /api/hello'),
     statBox('prompt', fmtN(s.prompt), '#/stats/prompt', '', 'prompt = input + cache read + cache write, summed over requests'),
     statBox('output', fmtN(s.output), '#/stats/output'),
     statBox('cache read', fmtN(s.cacheRead), '#/stats/cacheRead'),
     statBox('cache write', fmtN(s.cacheWrite), '#/stats/cacheWrite'),
     statBox('cache hit', fmtPct(s.prompt ? s.cacheRead / s.prompt : null), '#/stats/hit', '', 'cache read ÷ prompt over the session'),
-    statBox('cost', fmtUsd(s.cost) + (s.unpriced ? ` +${s.unpriced} unpriced` : ''), '#/stats/cost'),
+    statBox('cost (est.)', fmtUsd(s.cost) + (s.unpriced ? ` +${s.unpriced} unpriced` : ''), '#/stats/cost', '', 'estimate from pricing.json; long-context rates are not modeled'),
     statBox('wall clock', s.first != null ? fmtMs(s.last - s.first) : '—', '#/stats/requests', '', 'first request start to last reply end'),
-    statBox('avg latency', s.durN ? fmtMs(s.durSum / s.durN) : '—', '#/stats/duration'),
+    statBox('avg latency', s.durN ? fmtMs(s.durSum / s.durN) : '—', '#/stats/duration', '', 'mean total duration of model calls'),
     errs.length
       ? errs.map((k) => statBox('errors', `${k} × ${s.errors[k]}`, '#/errors/' + k, 'err'))
       : statBox('errors', '0', '#/stats/requests'),
-    h('span', { class: 'stat', onclick: () => go('#/tools'), title: 'Tool usage' }, h('span', { class: 'l' }, 'tool calls'), h('span', { class: 'v' }, fmtInt(Object.keys(state.tools).length)))]);
+    h('span', { class: 'stat', onclick: () => go('#/tools'), title: 'Tool usage' }, h('span', { class: 'l' }, 'tool calls'), h('span', { class: 'v' }, fmtInt(Object.keys(state.tools).length))),
+    state.evicted ? h('span', { class: 'stat err', title: 'The ring buffer dropped old exchanges, so these totals cover only what is still in it.' },
+      h('span', { class: 'l' }, 'evicted'), h('span', { class: 'v' }, `${fmtInt(state.evicted)} · totals shrank`)) : null]);
 }
 
 // ---- list
@@ -965,7 +1007,7 @@ function rowEl(ex, selId) {
   if (isCheck(ex)) {
     return h('div', { class: 'row check' + sel, onclick: open, dataset: { id: ex.id } },
       h('span', { class: 'id' }, '#' + ex.id), h('span', null, fmtTime(ex.started_at)),
-      h('span', { class: 'mono' }, `${ex.method} ${ex.path}`), st, ex.error ? h('span', { class: 'reason' }, ex.error) : null,
+      h('span', { class: 'mono' }, `${ex.method} ${ex.path}`), st,
       h('span', { class: 'dur' }, isStreaming(ex) ? h('span', { class: 'spin' }) : fmtMs(durationMs(ex))));
   }
   const t = tok(ex);
@@ -983,6 +1025,7 @@ function rowEl(ex, selId) {
       h('span', null, 'prompt ', h('b', null, t ? fmtN(t.prompt) : '…')),
       h('span', null, 'out ', h('b', null, t ? fmtN(t.output) : '…')),
       h('span', null, 'cache ', t ? fmtPct(t.hit) : '…'),
+      h('span', { title: ex.cost_usd == null && ex.ended_at ? 'model not in pricing.json' : 'estimated cost' }, ex.ended_at ? fmtUsd(ex.cost_usd) : '…'),
       ex.assembled.stop_reason ? h('span', null, ex.assembled.stop_reason) : null,
       labels,
     ];
@@ -997,9 +1040,15 @@ function rowEl(ex, selId) {
       isStreaming(ex) ? h('span', { class: 'spin', title: 'streaming' }) : null),
     h('div', { class: 'l2' }, l2));
 }
+// Nothing picked yet (no #/... route): the newest visible exchange is selected.
+function autoId() {
+  if (state.route.view !== 'empty') return null;
+  const rows = visibleExchanges();
+  return rows.length ? rows[0].id : null;
+}
+function selectedId() { return state.route.view === 'exchange' ? state.route.id : autoId(); }
 function renderList() {
-  const r = state.route;
-  const selId = r.view === 'exchange' ? r.id : null;
+  const selId = selectedId();
   const rows = visibleExchanges();
   $('#list').replaceChildren(...rows.map((ex) => rowEl(ex, selId)));
   const hidden = state.hideChecks ? apiCount(true) : 0;
@@ -1011,7 +1060,8 @@ function apiCount(checks) { let n = 0; for (const ex of state.ex.values()) if (i
 // ---- detail pane
 let detailKey = null, tabSig = null, lastTabRender = 0, tabTimer = null;
 function renderDetail() {
-  const r = state.route;
+  let r = state.route;
+  if (r.view === 'empty' && autoId() != null) r = { view: 'exchange', id: autoId() };
   const head = $('#dhead'), body = $('#dbody');
   let key, sig, build, buildHead;
   if (r.view === 'exchange') {
@@ -1078,11 +1128,11 @@ function detailHead(ex) {
     statBox('prompt', t ? fmtN(t.prompt) : '—', req, '', 'input + cache read + cache write'),
     statBox('output', t ? fmtN(t.output) : '—', rep),
     statBox('cache hit', t ? fmtPct(t.hit) : '—', req),
-    statBox('cost', ex.cost_usd != null ? fmtUsd(ex.cost_usd) : '—', repTab, '', ex.cost_usd == null && t ? 'model not in pricing.json' : 'from usage × pricing.json'),
+    statBox('cost (est.)', ex.cost_usd != null ? fmtUsd(ex.cost_usd) : '—', repTab, '', ex.cost_usd == null && t ? 'model not in pricing.json' : 'estimate from usage × pricing.json; long-context rates are not modeled'),
     statBox('total', fmtMs(tm.total_ms), repTab),
     statBox('ttfb', fmtMs(tm.ttfb_ms), repTab, '', 'time to first byte'),
     statBox('ttft', fmtMs(tm.ttft_ms), repTab, '', 'time to first token'),
-    statBox('tok/s', tokPerSec(ex) != null ? tokPerSec(ex).toFixed(0) : '—', repTab, '', 'output tokens per second while streaming (whole request if the reply came in one burst)'));
+    statBox('tok/s', tokPerSec(ex) != null ? tokPerSec(ex).toFixed(0) : '—', repTab, '', 'output ÷ (total − time to first token)'));
   const tabs = h('div', { class: 'tabs' },
     [['request', 'Request'], ['reply', 'Reply'], ['diff', 'Diff'], ['raw', 'Raw']].map(([id, label], i) =>
       h('button', { class: (state.tab === id ? 'on ' : '') + (id === 'reply' ? 'reply' : ''), title: `${label} (${i + 1})`,
@@ -1111,8 +1161,7 @@ function tabRequest(ex) {
       h('button', { style: '--accent: var(--c-sys)', onclick: jump('p-sys') }, 'System'),
       h('button', { style: '--accent: var(--c-tools)', onclick: jump('p-tools') }, `Tools (${n.tools.length})`),
       h('button', { style: '--accent: var(--c-conv)', onclick: jump('p-conv') }, `Conversation (${prior.length})`),
-      h('button', { style: '--accent: var(--c-new)', onclick: jump('p-new') }, 'New message'),
-      h('button', { style: '--accent: var(--c-params)', onclick: jump('p-params') }, 'Parameters')),
+      h('button', { style: '--accent: var(--c-new)', onclick: jump('p-new') }, 'New message')),
     expandBar(() => wrap.parentNode)));
 
   wrap.append(panel('p-sys', 'p-sys', 'System instructions',
@@ -1139,7 +1188,7 @@ function tabRequest(ex) {
     () => prior.length ? h('div', null, prior.map((m) => msgCard(ex, m))) : h('div', { class: 'muted' }, '(nothing before the new message)')));
 
   wrap.append(panel('p-new', 'p-new', 'New message', last ? `· ${last.role} #${last.index}` : null,
-    () => last ? msgCard(ex, last, { pairs: true, textOpen: true }) : h('div', { class: 'muted' }, '(no messages)')));
+    () => last ? msgCard(ex, last, { pairs: true }) : h('div', { class: 'muted' }, '(no messages)')));
 
   const pk = Object.keys(n.params);
   wrap.append(panel('p-params', 'p-params', 'Other parameters', `· ${pk.length}`,
@@ -1153,14 +1202,16 @@ function tabRequest(ex) {
 
 // ---- Reply tab
 function errorBox(ex) {
+  if (!isFailed(ex)) return null;
   const info = ex.error_info;
-  const failedStatus = ex.status != null && ex.status >= 400;
-  if (!ex.error && !info && !failedStatus) return null;
   const box = h('div', { class: 'errbox' });
-  if (ex.error) box.append(h('h3', null, 'Proxy error'), h('div', { class: 'mono' }, ex.error));
-  if (info || failedStatus) {
-    box.append(h('h3', null, `${ex.status != null ? ex.status : 'stream error'} ${(info && info.type) || ex.reason || ''}`));
+  if (httpFailed(ex)) {
+    box.append(h('h3', null, `${ex.status} ${(info && info.type) || ex.reason || ''}`));
     if (info && info.message) box.append(h('div', { class: 'prose' }, info.message));
+  } else {
+    box.append(h('h3', null, ex.status == null ? 'Proxy error' : 'Failed'), h('div', { class: 'mono' }, ex.error || ''));
+  }
+  {
     const ra = (info && info.retry_after) || hdr(ex.response_headers, 'retry-after');
     if (ra) box.append(h('div', null, 'retry-after: ', h('b', null, String(ra)), /^\d+(\.\d+)?$/.test(String(ra)) ? ' s' : ''));
     const rl = (info && info.ratelimit) || {};
@@ -1200,7 +1251,7 @@ function tabReply(ex) {
     return h('div', null, content.map((b, i) => {
       const k = `x${ex.id}:r:b${i}`;
       if (b && b.type === 'tool_use') return pairView(b.id, k, { callExchange: ex.id, call: { name: b.name, input: b.input, partial: b._partial_json } });
-      return blockView(ex, b, k, { textOpen: true });
+      return blockView(ex, b, k, { textOpen: isStreaming(ex) });
     }));
   }));
 
@@ -1213,7 +1264,7 @@ function tabReply(ex) {
     cell('cache write', t ? fmtInt(t.cacheWrite) : '—', 'usage.cache_creation_input_tokens'),
     cell('prompt', t ? fmtInt(t.prompt) : '—', 'input + cache read + cache write'),
     cell('cache hit', t ? fmtPct(t.hit) : '—', 'cache read ÷ prompt'),
-    cell('cost', fmtUsd(ex.cost_usd), ex.cost_usd == null ? 'model not in pricing.json' : ''),
+    cell('cost (est.)', fmtUsd(ex.cost_usd), ex.cost_usd == null ? 'model not in pricing.json' : 'estimate: long-context rates are not modeled'),
     cell('total', fmtMs(tm.total_ms)), cell('ttfb', fmtMs(tm.ttfb_ms)), cell('ttft', fmtMs(tm.ttft_ms)),
     cell('tok/s', tokPerSec(ex) != null ? tokPerSec(ex).toFixed(1) : '—'))));
   return wrap;
@@ -1238,6 +1289,10 @@ function tabDiff(ex) {
         ', the previous request of this conversation.', found.sameSystem ? '' : ' (Its system prompt differs.)')
       : h('span', null, 'No earlier request of this conversation is in the buffer, so every message counts as new.'),
     expandBar(() => wrap.parentNode)));
+  if (found && found.changed) {
+    wrap.append(h('div', { class: 'errbox' }, h('h3', null, 'Older messages changed'),
+      `Request #${found.prev.id} shares only the first ${found.k} messages with this one; after that the history was rewritten (for example by compaction). Everything after the shared part is shown as new.`));
+  }
   const bar = h('div', { class: 'diffbar', title: 'one square per message: grey = resent unchanged, orange = new' });
   for (let i = 0; i < total; i++) bar.append(h('span', { class: i >= k ? 'new' : '', title: `${n.messages[i].role} #${i}` }));
   const pc = found ? canon(found.prev) : null;
@@ -1246,12 +1301,12 @@ function tabDiff(ex) {
       h('b', { style: 'color:var(--c-new)' }, `${total - k} new`)),
     bar,
     found ? h('div', { class: 'muted small' },
-      `system prompt: ${pc.system === me.system ? 'same' : 'changed'} · tools: ${pc.tools === me.tools ? 'same' : 'changed'} · ` +
+      `system prompt: ${pc.system === me.system ? 'same' : 'changed'} (billing header ignored) · tools: ${pc.tools === me.tools ? 'same' : 'changed'} · ` +
       'The harness resends the whole history every turn; only the orange part is new.') : null)));
   const fresh = n.messages.slice(k);
   wrap.append(panel('p-new', 'p-diff-new', 'New since the previous request', `· ${fresh.length} message${fresh.length === 1 ? '' : 's'}`,
-    () => fresh.length ? h('div', null, fresh.map((m) => msgCard(ex, m, { pairs: m.index === total - 1, textOpen: true })))
-      : h('div', { class: 'muted' }, '(no new messages: this is an exact resend)')));
+    () => fresh.length ? h('div', null, fresh.map((m) => msgCard(ex, m, { pairs: m.index === total - 1 })))
+      : h('div', { class: 'muted' }, 'No new messages.')));
   return wrap;
 }
 
@@ -1260,6 +1315,33 @@ function headerTable(headers) {
   const keys = Object.keys(headers || {});
   if (!keys.length) return h('div', { class: 'muted' }, '(none)');
   return h('table', { class: 'kv' }, keys.map((k) => h('tr', null, h('th', { class: 'mono' }, k), h('td', { class: 'mono', style: 'overflow-wrap:anywhere' }, String(headers[k])))));
+}
+// The request body as sent, fetched on demand (it isn't in the event stream).
+const originalCache = new Map();
+function fetchOriginal(id) {
+  if (!originalCache.has(id)) {
+    originalCache.set(id, fetch(`/api/exchanges/${id}/request`).then((r) => {
+      if (!r.ok) throw new Error('not in the buffer any more');
+      return r.text();
+    }));
+  }
+  return originalCache.get(id);
+}
+function originalCopyBtn(id) {
+  const b = h('button', { class: 'mini' }, 'copy original text');
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fetchOriginal(id).then((t) => copyText(t, b), (err) => { originalCache.delete(id); b.textContent = 'failed: ' + err.message; });
+  });
+  return b;
+}
+function originalText(id) {
+  const box = h('div', { class: 'muted' }, 'loading…');
+  fetchOriginal(id).then(
+    (t) => box.replaceChildren(longText(t, `x${id}:origtext`)),
+    (err) => { originalCache.delete(id); box.textContent = 'Could not load: ' + err.message; });
+  box.classList.remove('muted');
+  return box;
 }
 function rawSse(ex) {
   return ex.response_events.map((e) => `event: ${e.event}\ndata: ${typeof e.data === 'string' ? e.data : JSON.stringify(e.data)}\n`).join('\n');
@@ -1273,8 +1355,11 @@ function tabRaw(ex) {
     headerTable(ex.request_headers))));
   wrap.append(panel('p-conv', 'p-raw-reqb', 'Request body', ex.request_body == null ? '· none' : null, () => {
     if (ex.request_body == null) return h('div', { class: 'muted' }, '(no body)');
-    if (typeof ex.request_body === 'string') return h('div', null, copyBtn(() => ex.request_body), longText(ex.request_body, `x${ex.id}:rawreq`));
-    return jsonView(ex.request_body, `x${ex.id}:rawreq`);
+    return h('div', null,
+      h('div', { class: 'toolbar' }, originalCopyBtn(ex.id),
+        h('span', { class: 'muted small' }, 'the body exactly as the harness sent it; the tree below is the parsed value')),
+      disclose(`x${ex.id}:rawtext`, 'original text', false, () => originalText(ex.id)),
+      typeof ex.request_body === 'string' ? longText(ex.request_body, `x${ex.id}:rawreq`) : jsonView(ex.request_body, `x${ex.id}:rawreq`));
   }));
   wrap.append(panel('p-reply', 'p-raw-resh', 'Response headers', ex.status != null ? `· ${ex.status} ${ex.reason || ''}` : '· waiting', () => h('div', null,
     h('div', { class: 'toolbar' }, copyBtn(() => JSON.stringify(ex.response_headers, null, 2), 'copy headers')),
@@ -1339,13 +1424,18 @@ const METRICS = {
   cacheRead: ['Cache-read tokens per request', (ex) => (tok(ex) || {}).cacheRead, (ex) => fmtInt((tok(ex) || {}).cacheRead)],
   cacheWrite: ['Cache-write tokens per request', (ex) => (tok(ex) || {}).cacheWrite, (ex) => fmtInt((tok(ex) || {}).cacheWrite)],
   hit: ['Cache hit per request', (ex) => (tok(ex) || {}).hit, (ex) => fmtPct((tok(ex) || {}).hit)],
-  cost: ['Cost per request', (ex) => ex.cost_usd, (ex) => fmtUsd(ex.cost_usd)],
+  cost: ['Estimated cost per request', (ex) => ex.cost_usd, (ex) => fmtUsd(ex.cost_usd)],
   duration: ['Duration per request', (ex) => ex.timing.total_ms, (ex) => fmtMs(ex.timing.total_ms)],
 };
-function statTitle(r) { return r.metric === 'errors' ? `Errors: ${r.status}` : (METRICS[r.metric] || METRICS.requests)[0]; }
+function statTitle(r) {
+  if (r.metric === 'errors') return `Errors: ${r.status}`;
+  if (r.metric === 'checks') return 'Checks (requests with no body)';
+  return (METRICS[r.metric] || METRICS.requests)[0];
+}
 function viewStats(r) {
   let list = apiExchanges();
   let metric = METRICS[r.metric] || METRICS.requests;
+  if (r.metric === 'checks') list = [...state.ex.values()].filter(isCheck);
   if (r.metric === 'errors') {
     list = list.filter((ex) => isFailed(ex) && errorKey(ex) === r.status);
     metric = ['', (ex) => ex.id, (ex) => errorReason(ex) || ''];
@@ -1423,7 +1513,7 @@ function renderModal() {
         facts.length ? h('table', { class: 'kv', style: 'margin-bottom:6px' }, facts.map(([a, v]) => h('tr', null, h('th', null, a), h('td', { class: 'mono' }, v == null ? '—' : String(v))))) : null,
         blockView(ex, b, `${key}:b${i}`, { textOpen: true, modal: true }));
     }),
-    h('h4', null, 'Raw JSON'),
+    h('h4', null, 'Raw JSON', h('span', { class: 'muted small', style: 'font-weight:normal' }, ' · the parsed value, re-serialized; the Raw tab has the original request text')),
     jsonView(m.raw, key + ':raw', { openDepth: 3, copy: JSON.stringify(m.raw) }))));
 }
 function closeModal() {
@@ -1461,7 +1551,7 @@ function onRoute() {
 function moveSelection(d) {
   const rows = visibleExchanges();
   if (!rows.length) return;
-  const cur = state.route.view === 'exchange' ? rows.findIndex((x) => x.id === state.route.id) : -1;
+  const cur = rows.findIndex((x) => x.id === selectedId());
   const next = cur === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, cur + d));
   go(`#/exchange/${rows[next].id}`);
 }
@@ -1499,7 +1589,7 @@ function init() {
     if (!$('#modal').hidden) return;
     if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
     else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
-    else if ('1234'.includes(e.key) && e.key.length === 1 && r.view === 'exchange') go(`#/exchange/${r.id}/${['request', 'reply', 'diff', 'raw'][+e.key - 1]}`);
+    else if ('1234'.includes(e.key) && e.key.length === 1 && selectedId() != null) go(`#/exchange/${selectedId()}/${['request', 'reply', 'diff', 'raw'][+e.key - 1]}`);
     else if (e.key === 't') go(r.view === 'tools' ? '#/' : '#/tools');
     else if (e.key === '/') { e.preventDefault(); $('#filter').focus(); }
     else if (e.key === 'p') togglePause();

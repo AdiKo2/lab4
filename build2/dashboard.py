@@ -48,13 +48,14 @@ SKIP = {
     "content-length",
 }
 # Headers whose values are secrets: stored and printed as the first 16 chars + "...".
-SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie"}
+SECRET_HEADERS = {"authorization", "x-api-key", "cookie", "set-cookie", "proxy-authorization"}
 
 UPSTREAM = "https://api.anthropic.com"
 QUIET = False
 BUFFER_SIZE = 200
-SUBSCRIBER_QUEUE = 5000          # events buffered per browser before it is dropped
-MAX_RAW_BODY = 4 * 1024 * 1024   # non-streaming reply bodies kept up to this size
+SUBSCRIBER_QUEUE = 5000          # events buffered per browser before it gets a fresh snapshot
+# The event that ends a complete stream. A stream that stops without one failed.
+FINAL_EVENTS = {"message_stop", "response.completed", "response.incomplete", "response.failed"}
 
 
 def stamp() -> str:
@@ -67,7 +68,7 @@ def iso(ts: float) -> str:
 
 def redact(name: str, value: str) -> str:
     if name.lower() in SECRET_HEADERS:
-        return value[:16] + "..."
+        return value[:16] + "..." if len(value) > 16 else "..."
     return value
 
 
@@ -133,27 +134,31 @@ class Pricing:
             warn(f"cannot read {self.path}: {e} (keeping previous prices)")
 
     def lookup(self, model):
+        """Exact match, or the name without a -YYYYMMDD suffix."""
         if not isinstance(model, str) or not model:
             return None
-        model = model.split("[")[0]  # e.g. "claude-opus-5-5[1m]"
         with self.lock:
             self._reload()
-            best = None
-            for key in self.table:
-                if model.startswith(key) and (best is None or len(key) > len(best)):
-                    best = key
-            return self.table.get(best) if best else None
+            return self.table.get(model) or self.table.get(re.sub(r"-\d{8}$", "", model))
 
     def cost(self, model, usage):
+        """An estimate: long-context rates aren't modeled."""
         price = self.lookup(model)
         if not price or not isinstance(usage, dict):
             return None
-        n = lambda k: usage.get(k) or 0  # noqa: E731
+        n = lambda d, k: (d or {}).get(k) or 0  # noqa: E731
+        split = usage.get("cache_creation")
+        if isinstance(split, dict):
+            write_5m = n(split, "ephemeral_5m_input_tokens")
+            write_1h = n(split, "ephemeral_1h_input_tokens")
+        else:
+            write_5m, write_1h = n(usage, "cache_creation_input_tokens"), 0
         return (
-            n("input_tokens") * price.get("input", 0)
-            + n("output_tokens") * price.get("output", 0)
-            + n("cache_read_input_tokens") * price.get("cache_read", 0)
-            + n("cache_creation_input_tokens") * price.get("cache_write", 0)
+            n(usage, "input_tokens") * price.get("input", 0)
+            + n(usage, "output_tokens") * price.get("output", 0)
+            + n(usage, "cache_read_input_tokens") * price.get("cache_read", 0)
+            + write_5m * price.get("cache_write_5m", 0)
+            + write_1h * price.get("cache_write_1h", 0)
         ) / 1_000_000
 
 
@@ -254,7 +259,7 @@ class Assembler:
 
     def __init__(self):
         self.codex_blocks: dict = {}  # Codex output_index -> our content index
-        self.first_token = False      # set once a content delta arrives
+        self.first_token = False      # set at the first non-empty text, thinking or tool-input delta
 
     def feed(self, name: str, d, assembled: dict) -> list:
         if not isinstance(d, dict):
@@ -281,13 +286,13 @@ class Assembler:
             i = d.get("index", 0)
             delta = d.get("delta") or {}
             dt = delta.get("type")
-            self.first_token = True
-            if dt == "text_delta":
-                return [{"op": "append", "i": i, "field": "text", "text": delta.get("text", "")}]
-            if dt == "input_json_delta":
-                return [{"op": "append", "i": i, "field": "_partial_json", "text": delta.get("partial_json", "")}]
-            if dt == "thinking_delta":
-                return [{"op": "append", "i": i, "field": "thinking", "text": delta.get("thinking", "")}]
+            field, key = {"text_delta": ("text", "text"), "input_json_delta": ("_partial_json", "partial_json"),
+                          "thinking_delta": ("thinking", "thinking")}.get(dt, (None, None))
+            if field:
+                text = delta.get(key) or ""
+                if text:
+                    self.first_token = True
+                return [{"op": "append", "i": i, "field": field, "text": text}]
             if dt == "signature_delta":
                 return [{"op": "field", "i": i, "field": "signature", "value": delta.get("signature")}]
             return []
@@ -333,15 +338,16 @@ class Assembler:
             self.codex_blocks[oi] = i
             return [{"op": "block", "i": i, "block": block}]
         i = self.codex_blocks.get(oi)
-        if t == "response.output_text.delta" and i is not None:
-            self.first_token = True
-            return [{"op": "append", "i": i, "field": "text", "text": d.get("delta", "")}]
-        if t in ("response.function_call_arguments.delta", "response.custom_tool_call_input.delta") and i is not None:
-            self.first_token = True
-            return [{"op": "append", "i": i, "field": "_partial_json", "text": d.get("delta", "")}]
-        if t in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta") and i is not None:
-            self.first_token = True
-            return [{"op": "append", "i": i, "field": "thinking", "text": d.get("delta", "")}]
+        field = {"response.output_text.delta": "text",
+                 "response.function_call_arguments.delta": "_partial_json",
+                 "response.custom_tool_call_input.delta": "_partial_json",
+                 "response.reasoning_summary_text.delta": "thinking",
+                 "response.reasoning_text.delta": "thinking"}.get(t)
+        if field and i is not None:
+            text = d.get("delta") or ""
+            if text:
+                self.first_token = True
+            return [{"op": "append", "i": i, "field": field, "text": text}]
         if t == "response.output_item.done" and i is not None:
             item = d.get("item") or {}
             if item.get("type") in ("function_call", "custom_tool_call"):
@@ -481,7 +487,31 @@ def error_info(status, headers: dict, body, stream_error):
 class Subscriber:
     def __init__(self):
         self.q: queue.Queue = queue.Queue(maxsize=SUBSCRIBER_QUEUE)
-        self.overflow = False
+        self.overflow = False   # lost events: gets a fresh snapshot before anything else
+
+
+def is_model_call(method: str, path: str, body) -> bool:
+    """A POST carrying `messages` (or Codex `input` and `model`), not count_tokens."""
+    if method != "POST" or not isinstance(body, dict) or "count_tokens" in path:
+        return False
+    return isinstance(body.get("messages"), list) or (isinstance(body.get("input"), list) and bool(body.get("model")))
+
+
+def failure_message(ex: dict, stream_error, streamed: bool, final_seen: bool):
+    """Why an exchange that got an answer still failed (§4), or None."""
+    def describe(err):
+        if isinstance(err, dict):
+            return ": ".join(str(x) for x in (err.get("type") or err.get("code"), err.get("message")) if x)
+        return str(err)
+    if ex["status"] is not None and ex["status"] >= 400:
+        info = ex["error_info"] or {}
+        detail = describe({"type": info.get("type"), "message": info.get("message")})
+        return f"HTTP {ex['status']}" + (f" {detail}" if detail else "")
+    if stream_error is not None:
+        return "stream error: " + (describe(stream_error) or "unknown")
+    if streamed and not final_seen:
+        return "stream ended without its final event"
+    return None
 
 
 class Store:
@@ -494,15 +524,16 @@ class Store:
         self.exchanges: "OrderedDict[int, dict]" = OrderedDict()
         self.tools: "OrderedDict[str, dict]" = OrderedDict()
         self.subscribers: list = []
-        self.next_id = 1
-        self.side: dict = {}             # id -> {"t0", "assembler", "hash", "stream_error"}
-        self.failed_by_hash: dict = {}   # request body hash -> last failed exchange id
+        self.next_id = 1                 # never resets, not even on clear
+        self.evicted = 0                 # exchanges dropped by the ring buffer since the last clear
+        self.side: dict = {}             # id -> {"t0", "assembler", "hash", "raw", "stream_error", "final"}
+        self.failed_by_hash: dict = {}   # request body hash -> nearest failed exchange not yet retried
 
     # -- event bus --------------------------------------------------------
 
     def publish(self, event: str, payload) -> None:
-        """Never blocks: a full subscriber queue drops that subscriber, whose
-        browser then reconnects and gets a fresh snapshot."""
+        """Never blocks. A subscriber whose queue is full stops receiving
+        events; its connection then sends it a fresh snapshot (see resync)."""
         if not self.subscribers:
             return
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -522,6 +553,17 @@ class Store:
             state = self._copy_state()
         return sub, state
 
+    def resync(self, sub):
+        """For a subscriber that lost events: drop what is queued, start over."""
+        with self.lock:
+            while True:
+                try:
+                    sub.q.get_nowait()
+                except queue.Empty:
+                    break
+            sub.overflow = False
+            return self._copy_state()
+
     def unsubscribe(self, sub) -> None:
         with self.lock:
             if sub in self.subscribers:
@@ -530,15 +572,17 @@ class Store:
     def _copy_state(self) -> dict:
         """A copy that later mutations cannot touch. Request bodies are never
         mutated after they are stored, so they are shared, not copied."""
-        exchanges = []
-        for ex in self.exchanges.values():
-            c = dict(ex)
-            c["response_events"] = list(ex["response_events"])
-            c["assembled"] = copy.deepcopy(ex["assembled"])
-            c["timing"] = dict(ex["timing"])
-            exchanges.append(c)
+        exchanges = [self._copy_one(ex) for ex in self.exchanges.values()]
         return {"exchanges": exchanges, "tools": {k: dict(v) for k, v in self.tools.items()},
-                "buffer_size": self.size}
+                "buffer_size": self.size, "evicted": self.evicted}
+
+    @staticmethod
+    def _copy_one(ex: dict) -> dict:
+        c = dict(ex)
+        c["response_events"] = list(ex["response_events"])
+        c["assembled"] = copy.deepcopy(ex["assembled"])
+        c["timing"] = dict(ex["timing"])
+        return c
 
     def export(self) -> dict:
         with self.lock:
@@ -549,31 +593,30 @@ class Store:
     def get(self, xid: int):
         with self.lock:
             ex = self.exchanges.get(xid)
-            if ex is None:
-                return None
-            return self._copy_state_one(ex)
+            return self._copy_one(ex) if ex is not None else None
 
-    @staticmethod
-    def _copy_state_one(ex: dict) -> dict:
-        c = dict(ex)
-        c["response_events"] = list(ex["response_events"])
-        c["assembled"] = copy.deepcopy(ex["assembled"])
-        return c
+    def request_raw(self, xid: int):
+        """The request body exactly as the harness sent it."""
+        with self.lock:
+            side = self.side.get(xid)
+            return side["raw"] if side else None
 
     @guarded
     def clear(self) -> None:
+        """In-flight exchanges leave the buffer too; their later events are
+        ignored, and their forwarding is not touched."""
         with self.lock:
             self.exchanges.clear()
             self.tools.clear()
             self.side.clear()
             self.failed_by_hash.clear()
+            self.evicted = 0
             self.publish("cleared", {})
 
     # -- exchange lifecycle (called from proxy threads) -----------------------
 
     @guarded
-    def start(self, method: str, path: str, header_items, raw_body: bytes):
-        t0 = time.time()
+    def start(self, method: str, path: str, header_items, raw_body: bytes, t0: float):
         headers = redacted_headers(header_items)
         body = decode_body(raw_body, headers)
         body_hash = hashlib.sha1(raw_body).hexdigest() if raw_body else None
@@ -589,6 +632,7 @@ class Store:
                 "status": None,
                 "reason": None,
                 "kind": "api" if raw_body else "check",
+                "model_call": is_model_call(method, path, body),
                 "request_headers": headers,
                 "request_body": body,
                 "response_headers": {},
@@ -602,8 +646,10 @@ class Store:
                 "retry_of": None,
                 "retried_by": None,
             }
-            self.side[xid] = {"t0": t0, "assembler": Assembler(), "hash": body_hash, "stream_error": None}
-            prev = self.failed_by_hash.get(body_hash) if body_hash else None
+            self.side[xid] = {"t0": t0, "assembler": Assembler(), "hash": body_hash, "raw": raw_body,
+                              "stream_error": None, "final": False}
+            # A failed request is linked to one retry only: the nearest one.
+            prev = self.failed_by_hash.pop(body_hash, None) if body_hash else None
             if prev in self.exchanges:
                 ex["retry_of"] = prev
                 self.exchanges[prev]["retried_by"] = xid
@@ -612,13 +658,16 @@ class Store:
             self.publish("exchange_started", ex)
             if prev in self.exchanges:
                 self.publish("exchange_meta", {"id": prev, "retried_by": xid})
-            self._pair_tools(ex, t0)
+            if ex["model_call"]:
+                self._pair_tools(ex, t0)
         return xid
 
     def _evict(self) -> None:
         while len(self.exchanges) > self.size:
             old, _ = self.exchanges.popitem(last=False)
             self.side.pop(old, None)
+            self.evicted += 1
+            self.publish("exchange_evicted", {"id": old})
         live = self.exchanges
         for tid in [k for k, v in self.tools.items()
                     if v.get("call_exchange") not in live and v.get("result_exchange") not in live]:
@@ -626,11 +675,15 @@ class Store:
 
     def _pair_tools(self, ex: dict, t0: float) -> None:
         body = ex["request_body"]
-        uses, results = {}, {}
+        uses, results, results_in = {}, {}, {}
         for mi, kind, item in tool_items(body):
             if item.get("id") is None:
                 continue
-            (uses if kind == "use" else results)[item["id"]] = (mi, item)
+            if kind == "use":
+                uses[item["id"]] = (mi, item)
+            else:
+                results.setdefault(item["id"], (mi, item))
+                results_in.setdefault(mi, set()).add(item["id"])
         for tid, (mi, res) in results.items():
             entry = self.tools.get(tid)
             if entry is None:
@@ -640,7 +693,7 @@ class Store:
                          "call_exchange": None, "call_ended_ms": None}
                 self.tools[tid] = entry
             elif entry.get("status") == "paired":
-                continue  # results are resent every turn; pair only once
+                continue  # results are resent every turn; the first request pairs
             call_ended = entry.get("call_ended_ms")
             entry.update({
                 "result_exchange": ex["id"],
@@ -655,13 +708,16 @@ class Store:
                 "tool_use_id": tid, "call_exchange": entry.get("call_exchange"),
                 "result_exchange": ex["id"], "result": entry["result"], "entry": entry,
             })
-        # A call that the conversation moved past without a result.
+        # No result: the call is in this history, and the message after it
+        # doesn't answer it. A retry repeats an earlier body, so it doesn't count.
+        if ex["retry_of"] is not None:
+            return
         last = message_count(body) - 1
         for tid, (mi, _use) in uses.items():
             entry = self.tools.get(tid)
-            if tid not in results and entry and entry.get("status") == "pending" and mi < last:
+            if entry and entry.get("status") == "pending" and mi < last and tid not in results_in.get(mi + 1, ()):
                 entry["status"] = "no_result"
-                self.publish("tool_update", {"tool_use_id": tid, "entry": entry})
+                self.publish("tool_updated", {"tool_use_id": tid, "entry": entry})
 
     @guarded
     def response(self, xid, status: int, reason: str, header_items) -> None:
@@ -693,6 +749,8 @@ class Store:
                 return
             side = self.side[xid]
             ex["response_events"].append(event)
+            if name in FINAL_EVENTS or (isinstance(parsed, dict) and parsed.get("type") in FINAL_EVENTS):
+                side["final"] = True
             asm = side["assembler"]
             had_token = asm.first_token
             patches = asm.feed(name, parsed, ex["assembled"]) if parsed is not None else []
@@ -706,14 +764,34 @@ class Store:
                 payload["timing"] = ex["timing"]
             self.publish("exchange_delta", payload)
 
+    def _close(self, ex: dict, t_end: float) -> None:
+        """What every ending does: tidy the reply, stamp the time, price it."""
+        asm = ex["assembled"]
+        for b in asm.get("content") or []:   # a stream cut short leaves raw tool input
+            if "_partial_json" in b:
+                b["input"] = parse_tool_input(b.pop("_partial_json"))
+        ex["ended_at"] = iso(t_end)
+        ex["timing"]["total_ms"] = round((t_end - self.side[ex["id"]]["t0"]) * 1000)
+        model = asm.get("model")
+        if not model and isinstance(ex["request_body"], dict):
+            model = ex["request_body"].get("model")
+        ex["cost_usd"] = PRICING.cost(model, asm.get("usage"))
+
+    def _ending(self, ex: dict) -> dict:
+        return {"id": ex["id"], "ended_at": ex["ended_at"], "status": ex["status"], "assembled": ex["assembled"],
+                "timing": ex["timing"], "cost_usd": ex["cost_usd"], "error_info": ex["error_info"],
+                "response_body": ex["response_body"]}
+
     @guarded
-    def done(self, xid, raw_body) -> None:
+    def finish(self, xid, raw_body, streamed: bool) -> None:
+        """The upstream reply ended. Publishes exchange_done, or exchange_error
+        if the reply was a failure (§4)."""
         if xid is None:
             return
         t_end = time.time()
         with self.lock:
             ex = self.exchanges.get(xid)
-            if ex is None:
+            if ex is None or ex["ended_at"]:
                 return
             side = self.side[xid]
             if raw_body is not None:
@@ -723,34 +801,30 @@ class Store:
                     ex["assembled"] = {k: body.get(k) for k in
                                        ("id", "model", "content", "stop_reason", "stop_sequence", "usage")}
                     ex["assembled"]["content"] = ex["assembled"]["content"] or []
-            asm = ex["assembled"]
-            for b in asm.get("content") or []:   # a stream cut short leaves raw tool input
-                if "_partial_json" in b:
-                    b["input"] = parse_tool_input(b.pop("_partial_json"))
-            ex["ended_at"] = iso(t_end)
-            ex["timing"]["total_ms"] = round((t_end - side["t0"]) * 1000)
-            model = asm.get("model")
-            if not model and isinstance(ex["request_body"], dict):
-                model = ex["request_body"].get("model")
-            ex["cost_usd"] = PRICING.cost(model, asm.get("usage"))
+            self._close(ex, t_end)
             ex["error_info"] = error_info(ex["status"], ex["response_headers"], ex["response_body"], side["stream_error"])
+            ex["error"] = failure_message(ex, side["stream_error"], streamed, side["final"])
+            if ex["error"] and ex["error_info"] is None:
+                ex["error_info"] = {"status": ex["status"], "type": None, "message": ex["error"],
+                                    "retry_after": None, "ratelimit": {}}
             self._track_failure(ex)
-            self.publish("exchange_done", {
-                "id": xid, "ended_at": ex["ended_at"], "status": ex["status"], "assembled": asm,
-                "timing": ex["timing"], "cost_usd": ex["cost_usd"], "error_info": ex["error_info"],
-                "response_body": ex["response_body"],
-            })
-            for b in asm.get("content") or []:
+            if ex["error"]:
+                self.publish("exchange_error", dict(self._ending(ex), message=ex["error"]))
+                return
+            self.publish("exchange_done", self._ending(ex))
+            for b in ex["assembled"].get("content") or []:
                 if b.get("type") == "tool_use" and b.get("id") and b["id"] not in self.tools:
                     entry = {"id": b["id"], "name": b.get("name"), "input": b.get("input"),
                              "call_exchange": xid, "call_ended_ms": round(t_end * 1000),
                              "result_exchange": None, "result_message": None, "result": None,
                              "is_error": False, "result_size": None, "wait_ms": None, "status": "pending"}
                     self.tools[b["id"]] = entry
-                    self.publish("tool_update", {"tool_use_id": b["id"], "entry": entry})
+                    self.publish("tool_updated", {"tool_use_id": b["id"], "entry": entry})
 
     @guarded
     def error(self, xid, message: str) -> None:
+        """The proxy side failed: upstream unreachable or dropped, or the client
+        went away. Does nothing if the exchange already ended."""
         if xid is None:
             return
         t_end = time.time()
@@ -758,29 +832,24 @@ class Store:
             ex = self.exchanges.get(xid)
             if ex is None or ex["ended_at"]:
                 return
+            self._close(ex, t_end)
             ex["error"] = message
-            ex["ended_at"] = iso(t_end)
-            ex["timing"]["total_ms"] = round((t_end - self.side[xid]["t0"]) * 1000)
-            if ex["status"] is None or ex["status"] < 400:
-                self._track_failure(ex, force=True)
-            self.publish("exchange_error", {"id": xid, "message": message, "ended_at": ex["ended_at"],
-                                            "timing": ex["timing"]})
+            self._track_failure(ex)
+            self.publish("exchange_error", dict(self._ending(ex), message=message))
 
-    def _track_failure(self, ex: dict, force: bool = False) -> None:
+    def _track_failure(self, ex: dict) -> None:
         h = self.side.get(ex["id"], {}).get("hash")
-        if not h:
-            return
-        if force or ex["error_info"] is not None or ex["error"]:
+        if h and ex["error"]:
             self.failed_by_hash[h] = ex["id"]
-        else:
-            self.failed_by_hash.pop(h, None)
 
 
 STORE = Store(BUFFER_SIZE)
 
 
 # --------------------------------------------------------------------------
-# The proxy (:8041). Same behavior and terminal output as proxy.py.
+# The proxy (:8041). Same behavior and terminal output as proxy.py, except
+# that cookies are redacted too and an upstream that fails before answering
+# gets the client a 502.
 
 
 def out(text: str) -> None:
@@ -805,10 +874,20 @@ class Tap(BaseHTTPRequestHandler):
         self.relay()
 
     def relay(self) -> None:
-        length = int(self.headers.get("content-length") or 0)
-        body = self.rfile.read(length) if length else b""
-        xid = STORE.start(self.command, self.path, self.headers.items(), body)
+        t0 = time.time()
+        xid = None
+        try:
+            length = int(self.headers.get("content-length") or 0)
+            body = self.rfile.read(length) if length else b""
+            xid = STORE.start(self.command, self.path, self.headers.items(), body, t0)
+            self.forward(xid, body)
+        finally:
+            # Every exchange ends exactly once; this catches anything unexpected.
+            # (STORE.error does nothing if it already ended.)
+            exc = sys.exc_info()[1]
+            STORE.error(xid, f"proxy failed: {exc!r}" if exc else "proxy stopped before the reply ended")
 
+    def forward(self, xid, body: bytes) -> None:
         # 1. Print what the agent sent.
         if not QUIET:
             print(f"\n{'=' * 78}\n[{stamp()}] >>> {self.command} {self.path}", flush=True)
@@ -839,7 +918,7 @@ class Tap(BaseHTTPRequestHandler):
             reply = upstream.getresponse()
         except (OSError, http.client.HTTPException) as e:
             out(f"\n[{stamp()}] !!! upstream failed: {e}\n")
-            STORE.error(xid, f"upstream failed: {e}")
+            STORE.error(xid, f"upstream failed before answering: {e}")
             self.send_error(502, f"proxy: upstream failed: {e}")
             self.close_connection = True
             return
@@ -855,7 +934,7 @@ class Tap(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         if self.command == "HEAD":
-            STORE.done(xid, None)
+            STORE.finish(xid, None, streamed=False)
             return
 
         is_sse = "text/event-stream" in (reply.getheader("content-type") or "")
@@ -879,7 +958,7 @@ class Tap(BaseHTTPRequestHandler):
             self.observe(xid, parser, raw, chunk)
         if parser:
             self.observe(xid, parser, raw, None)
-        STORE.done(xid, None if parser else bytes(raw))
+        STORE.finish(xid, None if parser else bytes(raw), streamed=bool(parser))
         out(f"\n[{stamp()}] --- done\n")
 
     @staticmethod
@@ -887,8 +966,7 @@ class Tap(BaseHTTPRequestHandler):
         """Parse a chunk for the dashboard. Never raises."""
         try:
             if parser is None:
-                if len(raw) < MAX_RAW_BODY:
-                    raw.extend(chunk)
+                raw.extend(chunk)
                 return
             events = parser.feed(chunk) if chunk is not None else parser.flush()
             for name, data in events:
@@ -907,12 +985,13 @@ class UI(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass
 
-    def local_only(self) -> bool:
-        """Reject other sites reaching this page through DNS rebinding or a form post."""
+    def local_only(self, check_origin: bool = False) -> bool:
+        """Reject other sites: a non-localhost Host (DNS rebinding), and a
+        non-localhost Origin on POST (a form posted from another page)."""
         host = (self.headers.get("host") or "").split(":")[0]
         origin = self.headers.get("origin")
         ok_host = host in ("localhost", "127.0.0.1", "[::1]")
-        ok_origin = origin is None or re.match(r"^http://(localhost|127\.0\.0\.1)(:\d+)?$", origin)
+        ok_origin = not check_origin or origin is None or re.match(r"^http://(localhost|127\.0\.0\.1)(:\d+)?$", origin)
         if ok_host and ok_origin:
             return True
         self.send_error(403, "dashboard is local only")
@@ -945,11 +1024,19 @@ class UI(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             elif path == "/events":
                 self.events()
-            elif path.startswith("/api/exchanges/"):
-                try:
-                    ex = STORE.get(int(path.rsplit("/", 1)[1]))
-                except ValueError:
-                    ex = None
+            elif re.match(r"^/api/exchanges/\d+/request$", path):
+                raw = STORE.request_raw(int(path.split("/")[3]))
+                if raw is None:
+                    self.send_json({"error": "not found"}, 404)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(raw)
+            elif re.match(r"^/api/exchanges/\d+$", path):
+                ex = STORE.get(int(path.rsplit("/", 1)[1]))
                 if ex is None:
                     self.send_json({"error": "not found"}, 404)
                 else:
@@ -966,7 +1053,7 @@ class UI(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self) -> None:
-        if not self.local_only():
+        if not self.local_only(check_origin=True):
             return
         if urlsplit(self.path).path == "/api/clear":
             STORE.clear()
@@ -981,11 +1068,16 @@ class UI(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            snapshot = json.dumps(state, ensure_ascii=False, separators=(",", ":"), default=str)
-            del state
-            self.wfile.write(b"retry: 1000\n\nevent: snapshot\ndata: " + snapshot.encode("utf-8") + b"\n\n")
-            self.wfile.flush()
-            while not sub.overflow:
+            self.wfile.write(b"retry: 1000\n\n")
+            while True:
+                if state is not None:
+                    snapshot = json.dumps(state, ensure_ascii=False, separators=(",", ":"), default=str)
+                    state = None
+                    self.wfile.write(b"event: snapshot\ndata: " + snapshot.encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                if sub.overflow:
+                    state = STORE.resync(sub)  # it lost events: start it over
+                    continue
                 try:
                     msg = sub.q.get(timeout=15)
                 except queue.Empty:
@@ -1009,7 +1101,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8041, help="proxy port (default 8041)")
     parser.add_argument("--ui-port", type=int, default=8042, help="dashboard port (default 8042)")
     parser.add_argument("--upstream", default=UPSTREAM, help="where to forward (default: the Anthropic API)")
-    parser.add_argument("--quiet", action="store_true", help="don't print traffic to the terminal")
+    parser.add_argument("--quiet", action="store_true", help="don't print traffic (startup lines still print)")
     parser.add_argument("--buffer", type=int, default=BUFFER_SIZE, help="exchanges kept in memory (default 200)")
     args = parser.parse_args()
     UPSTREAM = args.upstream.rstrip("/")
