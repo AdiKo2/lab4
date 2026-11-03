@@ -59,6 +59,6 @@ This change came from reading v3 against itself, plus one difference between bui
 
 ## Why we stopped regenerating
 
-At about 11:18 we switched from from-scratch builds to updating build 1 to spec v3. A from-scratch build took about 25 minutes (build 1 and A, B, C), roughly half of each was the agent's own tests, and the v3 changes are small and local.
+Build 2 was the last from-scratch build (from spec v2, `792a207`, 11:14). After it we switched to updating build 2's code to spec v4 instead of regenerating. A from-scratch build took about 25 minutes (build 1 and A, B, C), roughly half of each was the agent's own tests, and the v3 and v4 changes are small and local.
 
 We'd still regenerate from scratch for an architecture change, like the snapshot format.
