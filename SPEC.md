@@ -57,7 +57,8 @@ The dashboard must show:
 ```
 
 - **One Python process, two ports.**
-  - `:8041`: the proxy. Its behavior is identical to `proxy.py` today.
+  - `:8041`: the proxy. Its behavior is identical to `proxy.py` today, except
+    for the differences listed in §3.2 and §8.
   - `:8042`: the dashboard. It serves the HTML page and a Server-Sent Events
     (SSE) stream.
   - The ports are separate so dashboard routes can never collide with API
@@ -166,7 +167,7 @@ SSE events, all with a JSON payload:
 | `exchange_done`      | stream ends                           | id, ended_at, assembled               |
 | `exchange_error`     | the exchange failed (§4) or the client drops | id, message, ended_at, partial assembled |
 | `tool_paired`        | a request carries a `tool_result` for an earlier `tool_use` | tool_use_id, call exchange id, result exchange id, result |
-| `tool_updated`       | a call is added or its status changes | the tool index entry                  |
+| `tool_updated`       | a call is added or becomes *no result* (pairing uses `tool_paired`) | the tool index entry |
 | `exchange_evicted`   | the ring buffer drops an exchange     | id                                    |
 | `cleared`            | `POST /api/clear` empties the buffer  | none                                  |
 
@@ -174,6 +175,9 @@ SSE events, all with a JSON payload:
   `exchange_error`, and either one stops the row's spinner.
 - **Lost events:** a subscriber that lost events (§8) gets a fresh `snapshot`,
   so a dropped ending can't leave a row spinning.
+- **Clear during a stream:** an exchange still in flight leaves the buffer and
+  its later events are ignored, but its forwarding continues untouched. Clear
+  applies immediately even while paused, and drops the held events.
 
 Other endpoints on :8042:
 - `GET /`: serves `dashboard.html`.
@@ -195,8 +199,10 @@ Other endpoints on :8042:
     connection checks) are shown as a single dimmed line with only the id,
     time, method, path, status and duration. They show no token, cache or
     cost fields. A "hide checks" toggle in the list header hides them; it is
-    on by default.
-  - **Error rows** (status 4xx/5xx or a proxy error) show a short reason
+    on by default. This rule wins over the error-row rule, so a failed check
+    stays a dimmed line, and it isn't counted in the session's Errors.
+  - **Error rows** (a model call or other request with a body, with status
+    4xx/5xx or a proxy error) show a short reason
     instead of the token fields, e.g. `429 rate limited · retry after 6s`
     (see §6.11).
 - **Right side:** details of the selected exchange, in the tabs described below.
@@ -266,7 +272,7 @@ so on, shown as a small table.
   shown as *pending*. It becomes *no result* when a later model call in the same
   conversation (§6.7) has the call in its history, and the message after the
   call has no `tool_result` with that id.
-  - A retry of the same request doesn't count.
+  - A retry (§6.11) doesn't count.
   - A result that arrives later still turns the call into *paired*.
   - If compaction rewrites the history, this can't be detected, so the call
     stays *pending*.
@@ -305,7 +311,9 @@ Statistics are shown alongside the messages. They never replace them.
     - time to first token
     - output tokens per second
 - **Per session:** shown in a summary panel at the top.
-  - Totals: request count, tokens, cost, wall-clock time.
+  - Totals: model calls, errors, tokens, cost, wall-clock time. Requests with
+    no body are counted separately as checks, and add nothing to the other
+    totals. Failed model calls count, and add only the usage they report.
   - Average latency.
   - Cache hit ratio over the session.
 - **Tool usage:**
@@ -359,7 +367,8 @@ Statistics are shown alongside the messages. They never replace them.
 - **Previous request:** the nearest earlier model call whose messages are a
   prefix of this one, skipping failed attempts.
 - **Edge cases:**
-  - A resend with no new messages is labelled a retry.
+  - A request with no new messages is labelled "no new messages". The word
+    "retry" is used only as §6.11 defines it.
   - If older messages changed, compare with the longest shared prefix and show
     a warning.
 - Shows only the messages that are new since that previous request, so it is
@@ -440,6 +449,8 @@ Statistics are shown alongside the messages. They never replace them.
 - **Retries are linked:** a request whose body is identical to an earlier
   failed request is labelled "retry of #N" in its row, and the failed one
   is labelled "retried by #M". Clicking the label jumps to the other one.
+  N is the nearest such failed request, so a chain reads #3 retry of #2, and
+  #2 retry of #1. A failed request is linked to only one retry.
 - **Session summary:** the Errors count is split by status (e.g.
   `429 × 4`), and clicking it lists those exchanges.
 
