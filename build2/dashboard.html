@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent traffic dashboard</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1d2330; --muted: #6b7280; --line: #e3e6eb; --hover: #eef2f7; --sel: #dbe7ff;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --c-system: #7c3aed; --c-tools: #c2410c; --c-conv: #2563eb; --c-new: #047857; --c-reply: #be185d; --c-params: #64748b;
+  --err: #dc2626; --err-bg: #fdecec; --warn: #b45309; --ok: #15803d;
+  --j-key: #9333ea; --j-str: #047857; --j-num: #1d4ed8; --j-bool: #c2410c; --j-null: #6b7280;
+  --user-bg: #f1f6ff; --asst-bg: #fbf5ff; --new-bg: #ecfdf5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --panel: #1a1e26; --fg: #e3e7ee; --muted: #9aa3b2; --line: #2c323d; --hover: #222834; --sel: #213152;
+    --c-system: #a78bfa; --c-tools: #fb923c; --c-conv: #60a5fa; --c-new: #34d399; --c-reply: #f472b6; --c-params: #94a3b8;
+    --err: #f87171; --err-bg: #3a1d1f; --warn: #fbbf24; --ok: #4ade80;
+    --j-key: #c084fc; --j-str: #6ee7b7; --j-num: #93c5fd; --j-bool: #fdba74; --j-null: #9aa3b2;
+    --user-bg: #18233a; --asst-bg: #261b33; --new-bg: #10291f;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font: 13px/1.45 var(--sans); background: var(--bg); color: var(--fg); display: flex; flex-direction: column; overflow: hidden; }
+button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+button:hover { background: var(--hover); }
+a { color: var(--c-conv); cursor: pointer; text-decoration: none; }
+a:hover { text-decoration: underline; }
+input[type=search] { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--fg); width: 240px; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+
+/* top bar */
+#top { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#top h1 { font-size: 14px; margin: 0 8px 0 0; }
+#conn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+#conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+#conn.live::before { background: var(--ok); }
+#conn.reconnecting::before { background: var(--warn); }
+#top .spacer { flex: 1; }
+#banner { background: #fff7e0; color: #6b4e00; border-bottom: 1px solid #f1dfa6; padding: 4px 12px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+@media (prefers-color-scheme: dark) { #banner { background: #2e2710; color: #f3d98b; border-color: #4a3f17; } }
+#banner button { padding: 0 6px; }
+
+/* summary */
+#summary { display: flex; gap: 6px; padding: 6px 12px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; cursor: pointer; min-width: 70px; }
+.tile:hover { background: var(--hover); }
+.tile .k { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.tile .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .chip { display: inline-block; margin-right: 4px; color: var(--err); }
+.tile .chip:hover { text-decoration: underline; }
+
+/* main */
+#main { flex: 1; display: grid; grid-template-columns: minmax(330px, 34%) 1fr; min-height: 0; }
+#left { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+#list-h { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+#list-h label { font-weight: normal; font-size: 12px; margin-left: auto; }
+#list { overflow-y: auto; flex: 1; }
+.row { padding: 5px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); }
+.row .l1 { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.row .l1 .model { overflow: hidden; text-overflow: ellipsis; flex: 1; color: var(--muted); }
+.row .l2 { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.row .l2 b { color: var(--fg); font-weight: 600; }
+.row .err { color: var(--err); font-size: 12px; margin-top: 1px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.row.check { opacity: .55; padding: 2px 10px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .id { font-weight: 700; font-variant-numeric: tabular-nums; }
+.status { font-family: var(--mono); font-size: 11.5px; padding: 0 4px; border-radius: 3px; background: var(--hover); }
+.status.bad { background: var(--err-bg); color: var(--err); }
+.lbl { font-size: 11px; border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; margin-left: 4px; color: var(--warn); }
+.spin { width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--c-reply); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty { padding: 24px; color: var(--muted); }
+
+/* detail */
+#right { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#dhead { padding: 8px 14px 0; background: var(--bg); }
+#dtitle { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#strip { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
+#strip .s { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
+#strip .s:hover { background: var(--hover); }
+#strip .s span { color: var(--muted); font-size: 11px; margin-right: 4px; }
+#tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 14px; background: var(--bg); align-items: flex-end; }
+#tabs .tab { border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; padding: 4px 12px; background: transparent; }
+#tabs .tab.on { background: var(--panel); border-color: var(--line); margin-bottom: -1px; font-weight: 600; }
+#tabs .tab.t-reply.on { color: var(--c-reply); border-top: 3px solid var(--c-reply); }
+#tabs .tab.t-request.on { border-top: 3px solid var(--c-conv); }
+#tabs .tab:disabled { opacity: .4; cursor: default; }
+#tabs .spacer { flex: 1; }
+#tabs .tabctl { margin-bottom: 4px; font-size: 11.5px; }
+#body { flex: 1; overflow-y: auto; padding: 12px 14px 60px; background: var(--panel); min-width: 0; }
+
+/* panels */
+.panel { border: 1px solid var(--line); border-left: 4px solid var(--acc, var(--line)); border-radius: 6px; margin-bottom: 18px; background: var(--panel); }
+.panel-h { position: sticky; top: -12px; z-index: 3; background: var(--panel); display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); border-radius: 6px 6px 0 0; }
+.panel-h .name { color: var(--acc); font-weight: 700; }
+.panel-h .cnt { color: var(--muted); }
+.panel-h .ctl { margin-left: auto; display: flex; gap: 4px; }
+.panel-h .ctl button { font-size: 11px; padding: 0 6px; }
+.panel-b { padding: 8px 10px; }
+.p-system { --acc: var(--c-system); } .p-tools { --acc: var(--c-tools); } .p-conv { --acc: var(--c-conv); }
+.p-new { --acc: var(--c-new); background: var(--new-bg); } .p-new .panel-h { background: var(--new-bg); }
+.p-params { --acc: var(--c-params); } .p-reply { --acc: var(--c-reply); } .p-neutral { --acc: var(--c-params); }
+.p-error { --acc: var(--err); }
+#pindex { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+#pindex a { border: 1px solid var(--line); border-left: 4px solid var(--acc); padding: 1px 8px; border-radius: 4px; color: var(--fg); }
+
+/* text */
+.txt { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.txt.long .lt-body { max-height: calc(6 * 1.45em); overflow: hidden; position: relative; }
+.txt.long:not(.open) .lt-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.2em; background: linear-gradient(to bottom, transparent, var(--fadebg, var(--panel))); }
+.txt.long.open .lt-body { max-height: none; }
+.lt-toggle { margin-top: 3px; font-size: 11.5px; color: var(--c-conv); border-color: transparent; background: transparent; padding: 0; }
+.lt-toggle:hover { text-decoration: underline; background: transparent; }
+.mono .txt, .txt.mono { font-family: var(--mono); font-size: 12px; }
+.fold-h { border: none; background: transparent; padding: 0; color: var(--muted); font-size: 12px; }
+.fold-h:hover { background: transparent; color: var(--fg); }
+.fold-b { margin-top: 4px; }
+
+/* json */
+.json { font-family: var(--mono); font-size: 12px; position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; margin: 3px 0; overflow-wrap: anywhere; }
+.json-tools { position: absolute; right: 4px; top: 3px; z-index: 1; }
+.json-tools button, .copy { font-size: 10.5px; padding: 0 5px; }
+.j-kids { padding-left: 2ch; }
+.j-line { white-space: pre-wrap; }
+.j-key { color: var(--j-key); } .j-str { color: var(--j-str); } .j-num { color: var(--j-num); } .j-bool { color: var(--j-bool); } .j-null { color: var(--j-null); }
+.j-str.txt { display: inline-block; vertical-align: top; max-width: 100%; }
+.j-punc { color: var(--muted); }
+.j-tog { cursor: pointer; color: var(--muted); display: inline-block; width: 1.5ch; user-select: none; }
+.j-sum { cursor: pointer; color: var(--muted); font-style: italic; }
+.j-fmt { font-size: 10px; padding: 0 4px; margin: 0 4px; }
+
+/* messages */
+.card { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; background: var(--panel); }
+.card.role-user { background: var(--user-bg); --fadebg: var(--user-bg); margin-right: 8%; }
+.card.role-assistant { background: var(--asst-bg); --fadebg: var(--asst-bg); margin-left: 8%; }
+.card.isnew { box-shadow: 0 0 0 2px var(--c-new); }
+.card-h { display: flex; gap: 8px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.card-h .role { font-weight: 700; }
+.card-h .open { margin-left: auto; font-size: 11.5px; }
+.card-b { padding: 6px 8px; }
+.blk { margin: 4px 0 8px; }
+.badge { display: inline-block; font-size: 10.5px; font-family: var(--mono); padding: 0 5px; border-radius: 3px; margin-right: 6px; color: #fff; background: var(--c-params); }
+.b-text { background: #475569; } .b-tool_use { background: var(--c-tools); } .b-tool_result { background: var(--c-new); }
+.b-thinking, .b-redacted_thinking { background: #7c3aed; } .b-image, .b-document { background: #0e7490; }
+.cache { font-size: 10.5px; color: var(--warn); border: 1px dashed var(--warn); padding: 0 4px; border-radius: 3px; margin-left: 4px; }
+.iserr { color: #fff; background: var(--err); font-size: 10.5px; padding: 0 5px; border-radius: 3px; font-weight: 700; }
+.toolname { font-weight: 700; font-family: var(--mono); }
+.tooldef { border-bottom: 1px dashed var(--line); padding: 6px 0 8px; }
+.tooldef:last-child { border-bottom: none; }
+.sysblk { margin-bottom: 10px; }
+
+/* pairs */
+.pair { border: 1px solid var(--line); border-radius: 6px; margin: 6px 0; background: var(--panel); --fadebg: var(--panel); }
+.pair-h { display: flex; gap: 8px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 12px; flex-wrap: wrap; }
+.pair-cols { display: grid; grid-template-columns: 1fr 1fr; }
+.pair-cols > div { padding: 6px 8px; min-width: 0; }
+.pair-cols > div + div { border-left: 1px solid var(--line); }
+.pair-side-h { font-size: 11.5px; color: var(--muted); margin-bottom: 3px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pstat { font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--line); }
+.pstat.pending { color: var(--warn); border-color: var(--warn); }
+.pstat.no_result { color: var(--muted); border-style: dashed; }
+.pstat.paired { color: var(--ok); border-color: var(--ok); }
+
+/* tables */
+table.kv, table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.kv td, table.grid td, table.grid th { border-bottom: 1px solid var(--line); padding: 3px 6px; vertical-align: top; text-align: left; }
+table.kv td:first-child { font-family: var(--mono); color: var(--muted); width: 30%; white-space: nowrap; }
+table.kv td { overflow-wrap: anywhere; }
+table.grid th { color: var(--muted); font-weight: 600; }
+table.grid tr.click { cursor: pointer; }
+table.grid tr.click:hover { background: var(--hover); }
+table.grid td.n, table.grid th.n { text-align: right; font-variant-numeric: tabular-nums; }
+.errbox { border: 1px solid var(--err); background: var(--err-bg); border-radius: 6px; padding: 8px 10px; margin-bottom: 12px; }
+.errbox .t { color: var(--err); font-weight: 700; font-family: var(--mono); }
+.note { color: var(--muted); margin: 4px 0 10px; }
+.h3 { font-weight: 700; margin: 14px 0 6px; }
+
+/* modal */
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 20; }
+#modal.on { display: block; }
+#modal .box { position: absolute; inset: 4% 6%; background: var(--panel); border-radius: 8px; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+#modal .mh { padding: 8px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; font-weight: 600; }
+#modal .mh button { margin-left: auto; }
+#modal .mb { overflow-y: auto; padding: 12px 14px; flex: 1; }
+.mblock { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; }
+.mblock .full { white-space: pre-wrap; overflow-wrap: anywhere; }
+#toast { position: fixed; bottom: 14px; right: 14px; background: var(--fg); color: var(--bg); padding: 4px 10px; border-radius: 5px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; }
+#toast.on { opacity: .9; }
+</style>
+</head>
+<body>
+<div id="top">
+  <h1>Agent traffic</h1>
+  <span id="conn" class="connecting">connecting…</span>
+  <button id="pause" title="Pause / resume live updates">Pause</button>
+  <button id="clear" title="Empty the server buffer">Clear</button>
+  <a id="export" href="/api/export" download><button tabindex="-1">Export</button></a>
+  <button id="toolsbtn" title="Every tool call beside its result">Tools</button>
+  <input id="filter" type="search" placeholder="Filter: path, model or text">
+  <span class="spacer"></span>
+  <span class="muted small" id="upstream"></span>
+</div>
+<div id="banner"><span>⚠ Conversation contents (prompts, files, tool output) are shown here in full. Be careful when sharing screenshots or exports. Secret headers are redacted.</span><button id="banner-x" title="Hide">×</button></div>
+<div id="summary"></div>
+<div id="main">
+  <div id="left">
+    <div id="list-h"><span id="list-title">Exchanges</span><label><input type="checkbox" id="hidechecks" checked> hide checks</label></div>
+    <div id="list"></div>
+  </div>
+  <div id="right">
+    <div id="dhead"><div id="dtitle"></div><div id="strip"></div></div>
+    <div id="tabs"></div>
+    <div id="body"></div>
+  </div>
+</div>
+<div id="modal"><div class="box"><div class="mh"><span id="mtitle"></span><button id="mclose">Close (Esc)</button></div><div class="mb" id="mbody"></div></div></div>
+<div id="toast"></div>
+<script>
+'use strict';
+// All model/tool content is inserted with textContent / text nodes only. Never innerHTML.
+
+const S = {
+  ex: new Map(),          // id -> exchange
+  tools: {},              // tool_use_id -> pair entry
+  max: 200,
+  route: { view: 'none' },
+  sel: null,              // last selected exchange id
+  tab: 'request',
+  open: new Map(),        // fold/collapse state, keyed, survives re-renders
+  paused: false, queue: [],
+  filter: '', hideChecks: true,
+  conn: 'connecting',
+  visibleIds: [],
+  dirty: { list: false, rows: new Set(), summary: false, detail: false },
+  scrollTo: null,
+  fetching: new Set(),
+};
+
+// ------------------------------------------------------------------ helpers
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'style') el.style.cssText = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  add(el, kids);
+  return el;
+}
+function add(el, kids) {
+  for (const k of kids) {
+    if (k == null || k === false) continue;
+    if (Array.isArray(k)) add(el, k);
+    else if (k instanceof Node) el.appendChild(k);
+    else el.appendChild(document.createTextNode(String(k)));
+  }
+  return el;
+}
+const fmtInt = n => n == null ? '—' : Number(n).toLocaleString('en-US');
+function fmtK(n) { if (n == null) return '—'; n = Number(n); if (n < 1000) return String(Math.round(n)); if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + 'k'; return (n / 1e6).toFixed(2) + 'M'; }
+function fmtChars(n) { return n < 1000 ? String(n) : (n / 1000).toFixed(1) + 'k'; }
+function fmtMs(ms) { if (ms == null) return '—'; if (ms < 1000) return Math.round(ms) + ' ms'; if (ms < 60000) return (ms / 1000).toFixed(1) + ' s'; const m = Math.floor(ms / 60000); return m + 'm ' + Math.round((ms % 60000) / 1000) + 's'; }
+function fmtCost(c) { if (c == null) return '—'; return '$' + (c < 0.01 ? c.toFixed(4) : c < 10 ? c.toFixed(3) : c.toFixed(2)); }
+function fmtPct(x) { return x == null ? '—' : Math.round(x * 100) + '%'; }
+function fmtTime(iso) { if (!iso) return ''; const d = new Date(iso); return d.toLocaleTimeString('en-GB', { hour12: false }); }
+function lineCount(t) { let n = 1; for (let i = 0; i < t.length; i++) if (t.charCodeAt(i) === 10) n++; return n; }
+function isLong(t) { return t.length > 1000 || lineCount(t) > 12; }
+function preview(t) {
+  let idx = -1;
+  for (let i = 0; i < 6; i++) { const j = t.indexOf('\n', idx + 1); if (j < 0) { idx = -1; break; } idx = j; }
+  let p = idx < 0 ? t : t.slice(0, idx);
+  if (p.length > 1500) p = p.slice(0, 1500);
+  return p + '…';
+}
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 1200); }
+function copyText(text) {
+  const fallback = () => {
+    const ta = h('textarea', { style: 'position:fixed;left:-9999px' }); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('copied'); } catch (e) { toast('copy failed'); }
+    ta.remove();
+  };
+  try {
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => toast('copied'), fallback);
+    else fallback();
+  } catch (e) { fallback(); }
+}
+function copyBtn(get, label) { return h('button', { class: 'copy', title: 'Copy exact text', onclick: e => { e.stopPropagation(); copyText(get()); } }, label || 'copy'); }
+function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
+function exLink(id, tab, label) {
+  return h('a', { href: `#/exchange/${id}/${tab || 'request'}`, onclick: e => e.stopPropagation() }, label || `#${id}`);
+}
+
+// ------------------------------------------------------------------ data helpers
+function isCheck(ex) { return ex.kind === 'check'; }
+function usage(ex) { return (ex.assembled && ex.assembled.usage) || {}; }
+function hasUsage(ex) { const u = usage(ex); return u.input_tokens != null || u.output_tokens != null; }
+// One meaning per label, everywhere: input = usage.input_tokens; prompt = input + cache read + cache write; output = usage.output_tokens.
+function tok(ex) {
+  const u = usage(ex);
+  const input = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0, out = u.output_tokens || 0;
+  const prompt = input + cr + cw;
+  return { input, cr, cw, out, prompt, hit: prompt ? cr / prompt : null };
+}
+function modelOf(ex) { return (ex.assembled && ex.assembled.model) || (ex.request_body && typeof ex.request_body === 'object' && ex.request_body.model) || ''; }
+function isAbort(ex) { return ex.error && /^client disconnected/.test(ex.error); }
+function isError(ex) { return (ex.status >= 400) || (ex.error && !isAbort(ex)) || !!(ex.error_info && ex.error_info.in_stream); }
+function errorText(ex) {
+  const ei = ex.error_info;
+  let s = '';
+  if (ei) {
+    s = `${ex.status || ''} ${ei.type || 'error'}${ei.message ? ': ' + ei.message : ''}`.trim();
+    if (ei.retry_after) s += ` · retry after ${ei.retry_after}s`;
+  } else if (ex.error) s = `${ex.status || ''} proxy error: ${ex.error}`.trim();
+  else if (ex.status >= 400) s = `${ex.status} ${ex.reason || ''}`;
+  return s;
+}
+function parts(body) {
+  if (!body || typeof body !== 'object') return { system: undefined, msgs: null };
+  const system = body.system !== undefined ? body.system : body.instructions;
+  let msgs = Array.isArray(body.messages) ? body.messages : (Array.isArray(body.input) ? body.input : null);
+  return { system, msgs };
+}
+function tryParse(s) { if (typeof s !== 'string') return s; try { return JSON.parse(s); } catch (e) { return s; } }
+// Codex (Responses API) input items -> Anthropic-style message.
+function normMsg(m) {
+  if (!m || typeof m !== 'object') return { role: '?', content: [{ type: 'text', text: String(m) }] };
+  if (m.type === 'function_call') return { role: 'assistant', content: [{ type: 'tool_use', id: m.call_id, name: m.name, input: tryParse(m.arguments) }] };
+  if (m.type === 'function_call_output') return { role: 'user', content: [{ type: 'tool_result', tool_use_id: m.call_id, content: m.output }] };
+  if (m.type === 'reasoning') return { role: 'assistant', content: [{ type: 'thinking', thinking: (m.summary || []).map(s => s.text || '').join('\n\n') }] };
+  let content = m.content;
+  if (typeof content === 'string') content = [{ type: 'text', text: content }];
+  else if (Array.isArray(content)) content = content.map(b => (b && (b.type === 'input_text' || b.type === 'output_text')) ? Object.assign({}, b, { type: 'text' }) : b);
+  else content = [];
+  return { role: m.role || m.type || '?', content };
+}
+function hasCache(o) { if (!o || typeof o !== 'object') return false; if (o.cache_control) return true; const c = o.content; return Array.isArray(c) && c.some(b => b && b.cache_control); }
+function cacheFlag(o) { return o && o.cache_control ? h('span', { class: 'cache', title: JSON.stringify(o.cache_control) }, 'cache_control' + (o.cache_control.type ? ': ' + o.cache_control.type : '') + (o.cache_control.ttl ? ' ' + o.cache_control.ttl : '')) : null; }
+function contentSize(c) {
+  if (c == null) return 0;
+  if (typeof c === 'string') return c.length;
+  if (Array.isArray(c)) return c.reduce((n, b) => n + (b && b.type === 'text' ? (b.text || '').length : JSON.stringify(b).length), 0);
+  return JSON.stringify(c).length;
+}
+function searchText(ex) {
+  if (ex._search && ex.ended_at) return ex._search;
+  const { msgs } = parts(ex.request_body);
+  const bits = [ex.path, modelOf(ex)];
+  if (msgs && msgs.length) bits.push(JSON.stringify(msgs[msgs.length - 1]));
+  else if (typeof ex.request_body === 'string') bits.push(ex.request_body);
+  if (ex.assembled) bits.push(JSON.stringify(ex.assembled.content || []));
+  if (ex.error_info) bits.push(JSON.stringify(ex.error_info));
+  ex._search = bits.join('\n').toLowerCase();
+  return ex._search;
+}
+
+// ------------------------------------------------------------------ live assembly (mirrors dashboard.py Assembler)
+function applyEvent(ex, ev) {
+  const d = ev.data;
+  if (!d || typeof d !== 'object') return;
+  const a = ex.assembled || (ex.assembled = { model: null, content: [], stop_reason: null, usage: {} });
+  a.content = a.content || []; a.usage = a.usage || {};
+  ex._partial = ex._partial || {};
+  const t = d.type || ev.event;
+  const blk = i => { while (a.content.length <= i) a.content.push({ type: 'text', text: '' }); return a.content[i]; };
+  if (t === 'message_start') { const m = d.message || {}; a.model = m.model || a.model; Object.assign(a.usage, m.usage || {}); }
+  else if (t === 'content_block_start') {
+    const i = d.index ?? a.content.length; const b = Object.assign({}, d.content_block || {});
+    if (/tool_use$/.test(b.type || '')) { ex._partial[i] = ''; b.input = {}; }
+    blk(i); a.content[i] = b;
+  } else if (t === 'content_block_delta') {
+    const b = blk(d.index || 0), dd = d.delta || {};
+    if (dd.type === 'text_delta') b.text = (b.text || '') + (dd.text || '');
+    else if (dd.type === 'thinking_delta') b.thinking = (b.thinking || '') + (dd.thinking || '');
+    else if (dd.type === 'input_json_delta') ex._partial[d.index || 0] = (ex._partial[d.index || 0] || '') + (dd.partial_json || '');
+  } else if (t === 'content_block_stop') {
+    const i = d.index || 0;
+    if (ex._partial[i] != null) { const raw = ex._partial[i]; delete ex._partial[i]; try { blk(i).input = raw.trim() ? JSON.parse(raw) : {}; } catch (e) { blk(i).input_raw = raw; } }
+  } else if (t === 'message_delta') {
+    if (d.delta && d.delta.stop_reason != null) a.stop_reason = d.delta.stop_reason;
+    for (const [k, v] of Object.entries(d.usage || {})) if (v != null) a.usage[k] = v;
+  } else if (t === 'response.output_text.delta') {
+    ex._items = ex._items || {};
+    const key = d.item_id || '_t';
+    if (ex._items[key] == null) { ex._items[key] = a.content.length; a.content.push({ type: 'text', text: '' }); }
+    const b = a.content[ex._items[key]]; b.text = (b.text || '') + (d.delta || '');
+  } else if (t === 'response.created') { a.model = (d.response && d.response.model) || a.model; }
+}
+
+// ------------------------------------------------------------------ event handling
+function upsert(ex) {
+  ex._n = ex.event_count != null ? ex.event_count : (ex.response_events ? ex.response_events.length : 0);
+  if (!ex.response_events) ex.response_events = [];
+  S.ex.set(ex.id, ex);
+}
+function evict() {
+  while (S.ex.size > S.max) { const first = S.ex.keys().next().value; S.ex.delete(first); }
+}
+function markAll() { S.dirty.list = true; S.dirty.summary = true; S.dirty.detail = true; schedule(); }
+function touch(id, detail) {
+  S.dirty.rows.add(id); S.dirty.summary = true;
+  if (detail && S.route.view === 'exchange' && S.route.id === id) S.dirty.detail = true;
+  if (detail && S.route.view === 'stat') S.dirty.detail = true;
+  schedule();
+}
+const handlers = {
+  snapshot(p) {
+    S.ex = new Map(); S.tools = p.tools || {}; S.max = p.max_exchanges || 200;
+    for (const ex of p.exchanges || []) upsert(ex);
+    document.getElementById('upstream').textContent = p.upstream ? '→ ' + p.upstream : '';
+    markAll();
+  },
+  exchange_started(p) {
+    if (S.ex.has(p.id)) return;
+    upsert(p); evict();
+    S.dirty.list = true; S.dirty.summary = true;
+    if (S.route.view === 'exchange' && S.route.id === p.id) S.dirty.detail = true;
+    schedule();
+  },
+  exchange_response(p) {
+    const ex = S.ex.get(p.id); if (!ex) return;
+    ex.status = p.status; ex.reason = p.reason; ex.response_headers = p.headers;
+    ex.timing = ex.timing || {}; ex.timing.ttfb_ms = p.ttfb_ms;
+    touch(p.id, true);
+  },
+  exchange_delta(p) {
+    const ex = S.ex.get(p.id); if (!ex || ex.ended_at) return;
+    if (p.n < ex._n) return;                       // already in the snapshot
+    if (p.n > ex._n) ex.events_omitted = true;     // we missed some: raw tab refetches; done event fixes assembled
+    ex._n = p.n + 1;
+    if (!ex.events_omitted) ex.response_events.push(p.event);
+    applyEvent(ex, p.event);
+    if (p.ttft_ms != null) { ex.timing = ex.timing || {}; ex.timing.ttft_ms = p.ttft_ms; }
+    if (S.route.view === 'exchange' && S.route.id === p.id && (S.tab === 'reply' || S.tab === 'raw')) { S.dirty.detail = true; schedule(); }
+  },
+  exchange_done(p) { finishEx(p); },
+  exchange_error(p) { finishEx(p); },
+  exchange_retried(p) { const ex = S.ex.get(p.id); if (ex) { ex.retried_by = p.retried_by; touch(p.id, true); } },
+  tool_paired(p) { toolUpdate(p); },
+  tool_update(p) { toolUpdate(p); },
+  cleared() { S.ex = new Map(); S.tools = {}; markAll(); },
+};
+function finishEx(p) {
+  const ex = S.ex.get(p.id); if (!ex) return;
+  ex.ended_at = p.ended_at; ex.assembled = p.assembled; ex.status = p.status; ex.timing = p.timing;
+  ex.cost_usd = p.cost_usd; ex.error_info = p.error_info; ex.response_body = p.response_body;
+  if (p.error) ex.error = p.error;
+  if (p.event_count != null && p.event_count !== ex.response_events.length) ex.events_omitted = true;
+  ex._partial = null; ex._search = null;
+  touch(p.id, true);
+}
+function toolUpdate(p) {
+  S.tools[p.tool_use_id] = p.entry;
+  S.dirty.summary = true;
+  const r = S.route;
+  if (r.view === 'tools' || r.view === 'stat') S.dirty.detail = true;
+  if (r.view === 'exchange' && (r.id === p.entry.call_exchange || r.id === p.entry.result_exchange)) S.dirty.detail = true;
+  schedule();
+}
+function dispatch(name, data) {
+  if (S.paused && name !== 'snapshot') { S.queue.push([name, data]); updatePauseBtn(); return; }
+  if (S.paused && name === 'snapshot') { S.queue = [[name, data]]; updatePauseBtn(); return; }
+  try { handlers[name](data); } catch (e) { console.error('dashboard: failed to apply', name, e); }
+}
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => setConn('live');
+  es.onerror = () => setConn('reconnecting');
+  for (const name of Object.keys(handlers)) {
+    es.addEventListener(name, ev => { let d; try { d = JSON.parse(ev.data); } catch (e) { return; } dispatch(name, d); });
+  }
+}
+function setConn(c) { S.conn = c; const el = document.getElementById('conn'); el.className = c; el.textContent = c === 'live' ? 'live' : c === 'reconnecting' ? 'reconnecting…' : 'connecting…'; }
+function updatePauseBtn() { document.getElementById('pause').textContent = S.paused ? `Resume (${S.queue.length} buffered)` : 'Pause'; }
+
+// ------------------------------------------------------------------ render scheduling
+let rafPending = false;
+function schedule() { if (!rafPending) { rafPending = true; requestAnimationFrame(flush); } }
+function flush() {
+  rafPending = false;
+  const d = S.dirty;
+  try {
+    if (d.list) { renderList(); d.rows.clear(); } else if (d.rows.size) { for (const id of d.rows) updateRow(id); d.rows.clear(); }
+    if (d.summary) renderSummary();
+    if (d.detail) renderDetail();
+  } catch (e) { console.error('dashboard: render failed', e); }
+  d.list = d.summary = d.detail = false;
+}
+
+// ------------------------------------------------------------------ list
+function visible(ex) {
+  if (S.hideChecks && isCheck(ex)) return false;
+  if (S.filter && !searchText(ex).includes(S.filter)) return false;
+  return true;
+}
+function rowEl(ex) {
+  const sel = S.route.view === 'exchange' && S.route.id === ex.id;
+  const onclick = () => go(`#/exchange/${ex.id}/${['request', 'reply', 'diff', 'raw'].includes(S.tab) ? S.tab : 'request'}`);
+  const statusEl = h('span', { class: 'status' + (ex.status >= 400 || (ex.error && !isAbort(ex)) ? ' bad' : '') }, ex.status == null ? (ex.ended_at ? 'ERR' : '…') : ex.status);
+  const dur = ex.ended_at ? fmtMs(ex.timing && ex.timing.total_ms) : null;
+  if (isCheck(ex)) {
+    return h('div', { class: 'row check' + (sel ? ' sel' : ''), 'data-id': ex.id, onclick },
+      h('span', { class: 'id' }, '#' + ex.id), ' ', fmtTime(ex.started_at), ' ', h('span', { class: 'mono' }, ex.method + ' ' + ex.path), ' ', statusEl, ' ', dur || (ex.ended_at ? '' : h('span', { class: 'spin' })));
+  }
+  const labels = [];
+  if (ex.retry_of != null) labels.push(h('a', { class: 'lbl', onclick: e => { e.stopPropagation(); go(`#/exchange/${ex.retry_of}/reply`); } }, `retry of #${ex.retry_of}`));
+  if (ex.retried_by != null) labels.push(h('a', { class: 'lbl', onclick: e => { e.stopPropagation(); go(`#/exchange/${ex.retried_by}/request`); } }, `retried by #${ex.retried_by}`));
+  const l1 = h('div', { class: 'l1' }, h('span', { class: 'id' }, '#' + ex.id), h('span', { class: 'muted' }, fmtTime(ex.started_at)),
+    h('span', { class: 'model', title: modelOf(ex) }, modelOf(ex) || ex.path), statusEl, dur ? h('span', { class: 'muted' }, dur) : h('span', { class: 'spin', title: 'streaming' }), labels);
+  let l2;
+  if (isError(ex)) l2 = h('div', { class: 'err', title: errorText(ex) }, errorText(ex));
+  else {
+    const t = tok(ex), a = ex.assembled || {};
+    l2 = h('div', { class: 'l2' },
+      hasUsage(ex) ? ['prompt ', h('b', null, fmtInt(t.prompt)), ' · out ', h('b', null, fmtInt(t.out)), ' · cache ', h('b', null, fmtPct(t.hit))] : (ex.ended_at ? 'no usage' : 'streaming…'),
+      a.stop_reason ? ' · ' + a.stop_reason : '',
+      ex.ended_at && hasUsage(ex) ? ' · ' + fmtCost(ex.cost_usd) : '',
+      isAbort(ex) ? h('span', { style: 'color:var(--warn)' }, ' · aborted by client') : '');
+  }
+  return h('div', { class: 'row' + (sel ? ' sel' : ''), 'data-id': ex.id, onclick }, l1, l2);
+}
+function renderList() {
+  const list = document.getElementById('list');
+  const ids = [...S.ex.keys()].sort((a, b) => b - a);
+  const vis = ids.map(id => S.ex.get(id)).filter(visible);
+  S.visibleIds = vis.map(e => e.id);
+  const st = list.scrollTop;
+  list.textContent = '';
+  if (!vis.length) list.appendChild(h('div', { class: 'empty' }, S.ex.size ? 'No exchanges match.' : 'Waiting for traffic… run: ANTHROPIC_BASE_URL=http://localhost:8041 claude'));
+  for (const ex of vis) list.appendChild(rowEl(ex));
+  list.scrollTop = st;
+  const hidden = ids.length - vis.length;
+  document.getElementById('list-title').textContent = `Exchanges · ${vis.length}` + (hidden ? ` (${hidden} hidden)` : '');
+}
+function updateRow(id) {
+  const ex = S.ex.get(id); const old = document.querySelector(`#list .row[data-id="${id}"]`);
+  if (!ex) { if (old) old.remove(); return; }
+  if (!old) { if (visible(ex)) renderList(); return; }
+  if (!visible(ex)) { renderList(); return; }
+  old.replaceWith(rowEl(ex));
+}
+
+// ------------------------------------------------------------------ session summary
+function sessionStats() {
+  const all = [...S.ex.values()];
+  const api = all.filter(e => !isCheck(e));
+  const s = { requests: api.length, checks: all.length - api.length, prompt: 0, output: 0, cr: 0, cw: 0, input: 0, cost: 0, priced: 0, unpriced: 0, latSum: 0, latN: 0, errors: {}, t0: null, t1: null };
+  for (const e of all) {
+    const st = Date.parse(e.started_at), en = e.ended_at ? Date.parse(e.ended_at) : Date.now();
+    if (s.t0 == null || st < s.t0) s.t0 = st; if (s.t1 == null || en > s.t1) s.t1 = en;
+    if (isError(e)) { const k = e.status || 'proxy'; s.errors[k] = (s.errors[k] || 0) + 1; }
+  }
+  for (const e of api) {
+    if (hasUsage(e)) { const t = tok(e); s.prompt += t.prompt; s.output += t.out; s.cr += t.cr; s.cw += t.cw; s.input += t.input; if (e.cost_usd != null) { s.cost += e.cost_usd; s.priced++; } else if (e.ended_at) s.unpriced++; }
+    if (e.ended_at && e.timing && e.timing.total_ms != null && !isError(e)) { s.latSum += e.timing.total_ms; s.latN++; }
+  }
+  s.hit = s.prompt ? s.cr / s.prompt : null;
+  s.wall = s.t0 != null ? s.t1 - s.t0 : null;
+  s.avgLat = s.latN ? s.latSum / s.latN : null;
+  s.toolCalls = Object.keys(S.tools).length;
+  return s;
+}
+function renderSummary() {
+  const s = sessionStats();
+  const el = document.getElementById('summary'); el.textContent = '';
+  const tile = (k, v, metric, title) => h('div', { class: 'tile', title: title || 'Click to list the exchanges behind this number', onclick: () => go('#/stats/' + metric) }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v));
+  el.append(
+    tile('Requests', `${s.requests}` + (s.checks ? ` (+${s.checks} checks)` : ''), 'requests'),
+    tile('prompt', fmtInt(s.prompt), 'prompt', 'prompt = input + cache read + cache write, summed over all requests'),
+    tile('output', fmtInt(s.output), 'output'),
+    tile('cache read', fmtInt(s.cr), 'cache_read'),
+    tile('cache write', fmtInt(s.cw), 'cache_write'),
+    tile('Cost', fmtCost(s.priced ? s.cost : null) + (s.unpriced ? ` (+${s.unpriced} unpriced)` : ''), 'cost'),
+    tile('Wall clock', fmtMs(s.wall), 'wall'),
+    tile('Avg latency', fmtMs(s.avgLat), 'latency'),
+    tile('Cache hit', fmtPct(s.hit), 'cache_hit', 'cache read / prompt over the session'),
+  );
+  const errs = Object.entries(s.errors);
+  const et = h('div', { class: 'tile', onclick: () => go('#/stats/errors') }, h('div', { class: 'k' }, 'Errors'),
+    h('div', { class: 'v' }, errs.length ? errs.map(([k, n]) => h('span', { class: 'chip', onclick: e => { e.stopPropagation(); go('#/stats/errors/' + k); } }, `${k} × ${n}`)) : '0'));
+  el.append(et, tile('Tool calls', String(s.toolCalls), 'tools'));
+}
+
+// ------------------------------------------------------------------ generic widgets
+function longText(text, key, cls) {
+  text = text == null ? '' : String(text);
+  if (!isLong(text)) return h('div', { class: 'txt ' + (cls || '') }, text);
+  const box = h('div', { class: 'txt long ' + (cls || ''), 'data-k': key });
+  const body = h('div', { class: 'lt-body' });
+  const nl = lineCount(text);
+  const btn = h('button', { class: 'lt-toggle' });
+  const apply = open => {
+    box.classList.toggle('open', open);
+    body.textContent = open ? text : preview(text);
+    btn.textContent = open ? 'Collapse' : `Show all (${nl} lines, ${fmtChars(text.length)} chars)`;
+  };
+  box._set = open => { S.open.set(key, open); apply(open); };
+  box._isOpen = () => box.classList.contains('open');
+  btn.onclick = e => { e.stopPropagation(); box._set(!box._isOpen()); };
+  box.append(body, btn);
+  apply(S.open.get(key) === true);
+  return box;
+}
+function fold(key, label, defOpen, render, cls) {
+  const box = h('div', { class: 'fold ' + (cls || ''), 'data-k': key });
+  const head = h('button', { class: 'fold-h' });
+  const body = h('div', { class: 'fold-b' });
+  let rendered = false;
+  const apply = open => {
+    box.classList.toggle('open', open);
+    head.textContent = (open ? '▾ ' : '▸ ') + label;
+    if (open && !rendered) { rendered = true; add(body, [render()]); }
+    body.style.display = open ? '' : 'none';
+  };
+  box._set = open => { S.open.set(key, open); apply(open); };
+  box._isOpen = () => box.classList.contains('open');
+  head.onclick = e => { e.stopPropagation(); box._set(!box._isOpen()); };
+  box.append(head, body);
+  apply(S.open.has(key) ? S.open.get(key) : !!defOpen);
+  return box;
+}
+function setAll(root, open) {
+  for (let pass = 0; pass < 12; pass++) {
+    let changed = false;
+    for (const n of root.querySelectorAll('[data-k]')) {
+      if (n._set && n._isOpen() !== open) { n._set(open); changed = true; }
+    }
+    if (!changed || !open) break;
+  }
+}
+function expandCtl(getRoot) {
+  return [h('button', { title: 'Expand everything in this section', onclick: e => { e.stopPropagation(); setAll(getRoot(), true); } }, 'Expand all'),
+          h('button', { title: 'Collapse everything in this section', onclick: e => { e.stopPropagation(); setAll(getRoot(), false); } }, 'Collapse all')];
+}
+function panel(id, cls, name, count, content) {
+  const b = h('div', { class: 'panel-b' }, content);
+  return h('section', { class: 'panel ' + cls, id },
+    h('div', { class: 'panel-h' }, h('span', { class: 'name' }, name), count ? h('span', { class: 'cnt' }, count) : null, h('span', { class: 'ctl' }, expandCtl(() => b))), b);
+}
+
+// JSON tree
+function looksJson(s) { if (s.length < 2 || !/^\s*[[{]/.test(s)) return null; try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : null; } catch (e) { return null; } }
+function jsonView(value, key) {
+  return h('div', { class: 'json' }, h('div', { class: 'json-tools' }, copyBtn(() => JSON.stringify(value), 'copy')), jnode(value, key, 0));
+}
+function jstr(s, key, depth) {
+  const inner = () => isLong(s) ? longText(s, key + '#s', 'j-str') : h('span', { class: 'j-str' }, JSON.stringify(s));
+  const parsed = looksJson(s);
+  if (!parsed) return inner();
+  const fk = key + '#fmt';
+  const wrap = h('span', null);
+  const draw = () => {
+    wrap.textContent = '';
+    const on = S.open.get(fk) === true;
+    wrap.append(h('button', { class: 'j-fmt', title: 'This string is JSON: toggle parsed view', onclick: e => { e.stopPropagation(); S.open.set(fk, !on); draw(); } }, on ? 'raw' : 'format'),
+      on ? jnode(parsed, key + '#p', depth + 1) : inner());
+  };
+  draw();
+  return wrap;
+}
+function jnode(v, key, depth) {
+  if (v === null || v === undefined) return h('span', { class: 'j-null' }, 'null');
+  if (typeof v === 'boolean') return h('span', { class: 'j-bool' }, String(v));
+  if (typeof v === 'number') return h('span', { class: 'j-num' }, String(v));
+  if (typeof v === 'string') return jstr(v, key, depth);
+  const isArr = Array.isArray(v), keys = isArr ? null : Object.keys(v), n = isArr ? v.length : keys.length;
+  if (!n) return h('span', { class: 'j-punc' }, isArr ? '[]' : '{}');
+  const box = h('span', { class: 'j-coll', 'data-k': key });
+  const tog = h('span', { class: 'j-tog' });
+  const sum = h('span', { class: 'j-sum' }, isArr ? `[…] ${n} item${n === 1 ? '' : 's'}` : `{…} ${n} key${n === 1 ? '' : 's'}`);
+  const op = h('span', { class: 'j-punc' }, isArr ? '[' : '{');
+  const kids = h('div', { class: 'j-kids' });
+  const cl = h('span', { class: 'j-punc' }, isArr ? ']' : '}');
+  let rendered = false;
+  const apply = open => {
+    box.classList.toggle('open', open);
+    tog.textContent = open ? '▾' : '▸';
+    if (open && !rendered) {
+      rendered = true;
+      for (let i = 0; i < n; i++) {
+        const k = isArr ? i : keys[i];
+        kids.appendChild(h('div', { class: 'j-line' },
+          isArr ? null : [h('span', { class: 'j-key' }, JSON.stringify(k)), h('span', { class: 'j-punc' }, ': ')],
+          jnode(v[k], key + '/' + k, depth + 1), i < n - 1 ? h('span', { class: 'j-punc' }, ',') : null));
+      }
+    }
+    sum.style.display = open ? 'none' : '';
+    op.style.display = kids.style.display = cl.style.display = open ? '' : 'none';
+  };
+  box._set = open => { S.open.set(key, open); apply(open); };
+  box._isOpen = () => box.classList.contains('open');
+  const toggle = e => { e.stopPropagation(); box._set(!box._isOpen()); };
+  tog.onclick = toggle; sum.onclick = toggle;
+  box.append(tog, op, sum, kids, cl);
+  apply(S.open.has(key) ? S.open.get(key) : depth < 2);   // nodes deeper than 2 levels start folded
+  return box;
+}
+function strOrJson(s, key) {
+  const parsed = looksJson(s);
+  if (!parsed) return longText(s, key);
+  const fk = key + '#fmt';
+  const wrap = h('div', null);
+  const draw = () => {
+    wrap.textContent = '';
+    const on = S.open.get(fk) === true;
+    wrap.append(h('button', { class: 'j-fmt', onclick: e => { e.stopPropagation(); S.open.set(fk, !on); draw(); } }, on ? 'show raw text' : 'format JSON'),
+      on ? jsonView(parsed, key + '#p') : longText(s, key, 'mono'));
+  };
+  draw();
+  return wrap;
+}
+function kvTable(obj, copyable) {
+  const t = h('table', { class: 'kv' });
+  for (const [k, v] of Object.entries(obj || {})) t.appendChild(h('tr', null, h('td', null, k), h('td', null, v != null && typeof v === 'object' ? jsonView(v, 'kv/' + k) : String(v))));
+  return h('div', null, copyable ? h('div', { style: 'text-align:right' }, copyBtn(() => JSON.stringify(obj, null, 2), 'copy')) : null, t);
+}
+
+// ------------------------------------------------------------------ blocks, messages, pairs
+function badge(type) { return h('span', { class: 'badge b-' + type }, type); }
+function resultContent(c, key) {
+  if (c == null || c === '') return h('div', { class: 'muted' }, '(empty)');
+  if (typeof c === 'string') return strOrJson(c, key);
+  if (Array.isArray(c)) return c.map((b, i) => {
+    if (b && b.type === 'text') return h('div', { class: 'blk' }, strOrJson(b.text || '', key + '/' + i));
+    if (b && b.type === 'image') return h('div', { class: 'blk' }, badge('image'), imageInfo(b));
+    return jsonView(b, key + '/' + i);
+  });
+  return jsonView(c, key);
+}
+function imageInfo(b) {
+  const src = b.source || {};
+  const size = src.data ? Math.round(src.data.length * 3 / 4) : null;
+  return h('span', { class: 'muted' }, `${src.media_type || src.type || 'image'}` + (size != null ? ` · ${fmtChars(size)} bytes` : '') + (src.url ? ` · ${src.url}` : ''));
+}
+function pairRow(tid, key, ctx) {
+  ctx = ctx || {};
+  const e = S.tools[tid];
+  const callEx = e ? e.call_exchange : ctx.callEx;
+  const name = (e && e.name) || (ctx.call && ctx.call.name) || '?';
+  const input = e ? e.input : ctx.call && ctx.call.input;
+  let status = e ? e.status : 'pending';
+  let res = null;
+  if (e && e.status === 'paired') res = { content: e.result, is_error: e.is_error, ex: e.result_exchange, size: e.result_size };
+  else if (ctx.result) { res = { content: ctx.result.content, is_error: !!ctx.result.is_error, ex: ctx.resultEx, size: contentSize(ctx.result.content) }; status = 'paired'; }
+  const callLbl = callEx != null ? h('a', { onclick: ev => { ev.stopPropagation(); go(`#/exchange/${callEx}/reply`); } }, `reply #${callEx}`) : h('span', { class: 'muted', title: 'The call was made before the dashboard saw this conversation' }, 'earlier reply');
+  const resLbl = res && res.ex != null ? h('a', { onclick: ev => { ev.stopPropagation(); go(`#/exchange/${res.ex}/request`); } }, `request #${res.ex}`) : h('span', { class: 'muted' }, 'next request');
+  const left = h('div', null, h('div', { class: 'pair-side-h' }, 'call · ', callLbl), h('div', null, h('span', { class: 'toolname' }, name)),
+    ctx.partial != null ? h('div', { class: 'muted mono small' }, `assembling input… (${ctx.partial.length} chars)`) : jsonView(input == null ? {} : input, key + '/in'));
+  let right;
+  if (res) right = h('div', null, h('div', { class: 'pair-side-h' }, 'result · ', resLbl, res.is_error ? h('span', { class: 'iserr' }, 'is_error') : null, h('span', null, `${fmtChars(res.size || 0)} chars`)), resultContent(res.content, key + '/res'));
+  else right = h('div', null, h('div', { class: 'pair-side-h' }, 'result · ', resLbl), h('div', { class: 'muted' }, status === 'no_result' ? 'No result: the conversation moved on without one.' : 'Pending: waiting for the next request to carry the tool_result.'));
+  return h('div', { class: 'pair' },
+    h('div', { class: 'pair-h' }, badge('tool_use'), h('span', { class: 'toolname' }, name), h('span', { class: 'mono muted small' }, tid || ''),
+      h('span', { class: 'pstat ' + status }, status === 'no_result' ? 'no result' : status), h('span', { class: 'muted small' }, callLbl.cloneNode(true).textContent + ' → ' + (res && res.ex != null ? `request #${res.ex}` : '…'))),
+    h('div', { class: 'pair-cols' }, left, right));
+}
+function blockEl(b, key, ctx) {
+  if (b == null || typeof b !== 'object') return h('div', { class: 'blk' }, badge('text'), longText(String(b), key));
+  const t = b.type || '?';
+  const head = (...extra) => h('div', null, badge(t), ...extra, cacheFlag(b));
+  switch (t) {
+    case 'text': return h('div', { class: 'blk' }, head(), longText(b.text, key));
+    case 'tool_use': case 'server_tool_use': case 'mcp_tool_use':
+      if (ctx && ctx.pairs && t === 'tool_use') return h('div', { class: 'blk' }, pairRow(b.id, key, { call: b, callEx: ctx.callEx, partial: ctx.partials && ctx.partials[ctx.index] }), cacheFlag(b));
+      return h('div', { class: 'blk' }, head(h('span', { class: 'toolname' }, b.name), ' ', h('span', { class: 'mono muted small' }, b.id || ''), ctx && ctx.exId != null && S.tools[b.id] ? [' ', toolPairLink(b.id)] : null), jsonView(b.input == null ? {} : b.input, key + '/in'));
+    case 'tool_result':
+      if (ctx && ctx.pairs) return h('div', { class: 'blk' }, pairRow(b.tool_use_id, key, { result: b, resultEx: ctx.exId }), cacheFlag(b));
+      return h('div', { class: 'blk' }, head(h('span', { class: 'mono muted small' }, 'for ' + (b.tool_use_id || '?')), b.is_error ? [' ', h('span', { class: 'iserr' }, 'is_error')] : null, ' ', h('span', { class: 'muted small' }, fmtChars(contentSize(b.content)) + ' chars'), S.tools[b.tool_use_id] ? [' ', toolPairLink(b.tool_use_id)] : null), resultContent(b.content, key + '/c'));
+    case 'thinking': return h('div', { class: 'blk' }, head(), fold(key, `thinking (${fmtChars((b.thinking || '').length)} chars)`, false, () => h('div', { class: 'txt' }, b.thinking || '')));
+    case 'redacted_thinking': return h('div', { class: 'blk' }, head(h('span', { class: 'muted' }, '(redacted by the API)')));
+    case 'image': return h('div', { class: 'blk' }, head(imageInfo(b)));
+    case 'document': return h('div', { class: 'blk' }, head(imageInfo(b)));
+    default: return h('div', { class: 'blk' }, head(), jsonView(b, key));
+  }
+}
+function toolPairLink(tid) {
+  const e = S.tools[tid];
+  const txt = `${e.call_exchange != null ? 'reply #' + e.call_exchange : 'earlier'} → ${e.result_exchange != null ? 'request #' + e.result_exchange : (e.status === 'no_result' ? 'no result' : 'pending')}`;
+  return h('a', { class: 'small', title: 'Show this call beside its result', onclick: ev => { ev.stopPropagation(); go('#/tools/' + encodeURIComponent(e.name || '(unknown)')); } }, txt);
+}
+function msgCard(m, idx, ex, opts) {
+  opts = opts || {};
+  const n = normMsg(m);
+  const role = n.role;
+  const key = `x${ex.id}/m${idx}`;
+  return h('div', { class: `card role-${role}` + (opts.isNew ? ' isnew' : ''), id: `msg-${idx}` },
+    h('div', { class: 'card-h' }, h('span', { class: 'role' }, `${role} #${idx}`), hasCache(m) ? h('span', { class: 'cache' }, 'cache_control') : null,
+      h('span', { class: 'muted small' }, `${n.content.length} block${n.content.length === 1 ? '' : 's'}`),
+      h('a', { class: 'open', href: `#/exchange/${ex.id}/message/${idx}`, onclick: e => e.stopPropagation() }, 'open ⤢')),
+    h('div', { class: 'card-b' }, n.content.map((b, j) => blockEl(b, `${key}/b${j}`, { pairs: opts.isNew, exId: ex.id }))));
+}
+
+// ------------------------------------------------------------------ detail rendering
+const TABS = [['request', 'Request'], ['reply', 'Reply'], ['diff', 'Diff'], ['raw', 'Raw'], ['tools', 'Tools']];
+function renderTabs() {
+  const el = document.getElementById('tabs'); el.textContent = '';
+  const cur = S.route.view === 'exchange' ? S.tab : S.route.view === 'tools' ? 'tools' : null;
+  for (const [id, label] of TABS) {
+    const disabled = id !== 'tools' && S.sel == null;
+    el.appendChild(h('button', { class: `tab t-${id}` + (cur === id ? ' on' : ''), disabled, onclick: () => go(id === 'tools' ? '#/tools' : `#/exchange/${S.sel}/${id}`) }, label));
+  }
+  el.appendChild(h('span', { class: 'spacer' }));
+  for (const b of expandCtl(() => document.getElementById('body'))) { b.classList.add('tabctl'); el.appendChild(b); }
+}
+function renderDetail() {
+  const body = document.getElementById('body');
+  const r = S.route;
+  const rkey = JSON.stringify([r.view, r.id, r.tab, r.tool, r.metric, r.arg]);
+  const keep = body._rkey === rkey ? body.scrollTop : 0;
+  body._rkey = rkey;
+  body.textContent = '';
+  document.getElementById('dtitle').textContent = '';
+  document.getElementById('strip').textContent = '';
+  renderTabs();
+  let content;
+  if (r.view === 'exchange') {
+    const ex = S.ex.get(r.id);
+    if (!ex) content = h('div', { class: 'empty' }, `Exchange #${r.id} is not in the buffer.`);
+    else {
+      renderHead(ex);
+      content = r.tab === 'reply' ? replyTab(ex) : r.tab === 'diff' ? diffTab(ex) : r.tab === 'raw' ? rawTab(ex) : requestTab(ex);
+    }
+  } else if (r.view === 'tools') content = toolsView(r.tool);
+  else if (r.view === 'stat') content = statView(r.metric, r.arg);
+  else content = h('div', { class: 'empty' }, 'Select an exchange on the left, or click a statistic above. Keys: ↑/↓ or j/k move, 1–4 switch tabs, t opens Tools.');
+  add(body, [content]);
+  body.scrollTop = keep;
+  if (S.scrollTo) { const t = document.getElementById(S.scrollTo); S.scrollTo = null; if (t) t.scrollIntoView({ block: 'start' }); }
+  renderModal();
+}
+function renderHead(ex) {
+  const t = document.getElementById('dtitle');
+  add(t, [h('span', null, `#${ex.id}`), h('span', { class: 'mono' }, `${ex.method} ${ex.path}`),
+    h('span', { class: 'status' + (isError(ex) ? ' bad' : '') }, ex.status == null ? '…' : ex.status), h('span', { class: 'muted' }, modelOf(ex)),
+    h('span', { class: 'muted' }, fmtTime(ex.started_at)), ex.ended_at ? null : h('span', { class: 'spin' }),
+    ex.retry_of != null ? h('a', { class: 'lbl', onclick: () => go(`#/exchange/${ex.retry_of}/reply`) }, `retry of #${ex.retry_of}`) : null,
+    ex.retried_by != null ? h('a', { class: 'lbl', onclick: () => go(`#/exchange/${ex.retried_by}/request`) }, `retried by #${ex.retried_by}`) : null]);
+  const strip = document.getElementById('strip');
+  const tm = ex.timing || {};
+  const s = (k, v, title) => h('span', { class: 's', title: title || 'Open the usage panel', onclick: () => { S.scrollTo = 'usage'; go(`#/exchange/${ex.id}/reply`); } }, h('span', null, k), v);
+  if (isCheck(ex)) { strip.append(s('total', fmtMs(tm.total_ms)), s('TTFB', fmtMs(tm.ttfb_ms))); return; }
+  const t2 = tok(ex), hu = hasUsage(ex);
+  const tps = hu && tm.total_ms && tm.ttft_ms != null && tm.total_ms > tm.ttft_ms ? (t2.out / ((tm.total_ms - tm.ttft_ms) / 1000)).toFixed(1) + '/s' : '—';
+  strip.append(s('input', hu ? fmtInt(t2.input) : '—', 'usage.input_tokens (uncached part)'), s('output', hu ? fmtInt(t2.out) : '—'),
+    s('cache read', hu ? fmtInt(t2.cr) : '—'), s('cache write', hu ? fmtInt(t2.cw) : '—'),
+    s('prompt', hu ? fmtInt(t2.prompt) : '—', 'prompt = input + cache read + cache write'), s('cache hit', hu ? fmtPct(t2.hit) : '—'),
+    s('cost', fmtCost(ex.cost_usd), ex.cost_usd == null ? 'Model not in pricing.json (or no usage)' : null),
+    s('total', fmtMs(tm.total_ms)), s('TTFB', fmtMs(tm.ttfb_ms), 'time to first byte'), s('TTFT', fmtMs(tm.ttft_ms), 'time to first token'), s('out tok/s', tps));
+}
+
+function requestTab(ex) {
+  const b = ex.request_body;
+  if (b == null) return h('div', null, h('div', { class: 'note' }, `No request body: ${ex.method} ${ex.path} is a connection check.`), panel('p-hdr', 'p-neutral', 'Request headers', null, kvTable(ex.request_headers)));
+  if (typeof b !== 'object' || Array.isArray(b)) return panel('p-body', 'p-neutral', 'Request body (not a JSON object)', null, typeof b === 'string' ? longText(b, `x${ex.id}/body`, 'mono') : jsonView(b, `x${ex.id}/body`));
+  const { system, msgs } = parts(b);
+  const key = `x${ex.id}`;
+  // 1. System
+  const sysBlocks = system == null ? [] : typeof system === 'string' ? [{ type: 'text', text: system }] : Array.isArray(system) ? system : [system];
+  const sysChars = sysBlocks.reduce((n, x) => n + (typeof x === 'string' ? x.length : (x && x.text ? x.text.length : JSON.stringify(x).length)), 0);
+  const sysPanel = panel('p-system', 'p-system', 'System instructions', `· ${sysBlocks.length} block${sysBlocks.length === 1 ? '' : 's'} · ~${fmtK(sysChars / 4)} tokens · ${fmtChars(sysChars)} chars`,
+    sysBlocks.length ? sysBlocks.map((x, i) => h('div', { class: 'sysblk' }, h('div', { class: 'muted small' }, `block ${i}`, typeof x === 'object' ? cacheFlag(x) : null),
+      typeof x === 'string' ? longText(x, `${key}/sys${i}`) : x && typeof x.text === 'string' ? longText(x.text, `${key}/sys${i}`) : jsonView(x, `${key}/sys${i}`)))
+      : h('div', { class: 'muted' }, 'No system field in this request.'));
+  // 2. Tools
+  const tools = Array.isArray(b.tools) ? b.tools : [];
+  const toolsPanel = panel('p-tools', 'p-tools', 'Tools', `· ${tools.length}`,
+    tools.length ? tools.map((t, i) => {
+      const fn = t && t.function ? t.function : t || {};
+      const schema = fn.input_schema || fn.parameters;
+      return h('div', { class: 'tooldef' }, h('div', null, h('span', { class: 'toolname' }, fn.name || t.type || `tool ${i}`), t.type && t.type !== 'function' && t.type !== 'custom' && fn.name ? h('span', { class: 'muted small' }, ' · ' + t.type) : null, cacheFlag(t)),
+        fn.description ? longText(fn.description, `${key}/tool${i}/d`) : h('div', { class: 'muted small' }, '(no description)'),
+        schema ? fold(`${key}/tool${i}/s`, 'input schema', false, () => jsonView(schema, `${key}/tool${i}/sj`)) : fold(`${key}/tool${i}/s`, 'definition', false, () => jsonView(t, `${key}/tool${i}/sj`)));
+    }) : h('div', { class: 'muted' }, 'No tools in this request.'));
+  // 3 + 4. Messages
+  const ms = msgs || [];
+  const earlier = ms.slice(0, -1), last = ms.length ? ms[ms.length - 1] : null;
+  const convPanel = panel('p-conv', 'p-conv', 'Conversation so far', `· ${earlier.length} message${earlier.length === 1 ? '' : 's'}`,
+    earlier.length ? earlier.map((m, i) => msgCard(m, i, ex)) : h('div', { class: 'muted' }, 'Nothing earlier: this is the first message.'));
+  const newPanel = panel('p-new', 'p-new', 'New message', last ? `· ${normMsg(last).role} #${ms.length - 1}` : null,
+    last ? msgCard(last, ms.length - 1, ex, { isNew: true }) : h('div', { class: 'muted' }, 'No messages.'));
+  // Other parameters
+  const skip = new Set(['system', 'tools', 'messages', 'instructions', 'input']);
+  const params = {};
+  for (const [k, v] of Object.entries(b)) if (!skip.has(k)) params[k] = v;
+  const idx = h('div', { id: 'pindex' }, [['p-system', 'System', 'c-system'], ['p-tools', 'Tools', 'c-tools'], ['p-conv', 'Conversation', 'c-conv'], ['p-new', 'New message', 'c-new'], ['p-params', 'Parameters', 'c-params']]
+    .map(([id, l, c]) => h('a', { style: `--acc: var(--${c})`, onclick: () => { const t = document.getElementById(id); if (t) t.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }, l)));
+  return h('div', null, idx, sysPanel, toolsPanel, convPanel, newPanel, panel('p-params', 'p-params', 'Other parameters', `· ${Object.keys(params).length}`, kvTable(params)));
+}
+
+function errorBox(ex) {
+  if (!isError(ex) && !isAbort(ex)) return null;
+  const ei = ex.error_info || {};
+  const box = h('div', { class: 'errbox' }, h('div', { class: 't' }, errorText(ex) || ex.error));
+  if (ei.retry_after || (ei.ratelimit && Object.keys(ei.ratelimit).length)) {
+    const rl = Object.assign({}, ei.retry_after ? { 'retry-after': ei.retry_after } : {}, ei.ratelimit || {});
+    box.append(h('div', { class: 'h3' }, 'Rate limit headers'), kvTable(rl));
+  }
+  return box;
+}
+function replyTab(ex) {
+  const wrap = h('div', null, errorBox(ex));
+  if (isCheck(ex)) { wrap.append(h('div', { class: 'note' }, `Status ${ex.status ?? '…'} ${ex.reason || ''}. No body.`)); return wrap; }
+  const a = ex.assembled || { content: [] };
+  wrap.append(h('div', { class: 'note' }, 'model ', h('b', null, a.model || modelOf(ex) || '—'), ' · stop_reason ', h('b', null, a.stop_reason || (ex.ended_at ? '—' : 'streaming…')),
+    ' · ', h('a', { href: `#/exchange/${ex.id}/message/reply` }, 'open reply message ⤢')));
+  const content = a.content || [];
+  const blocks = content.map((b, i) => blockEl(b, `x${ex.id}/r/b${i}`, { pairs: true, callEx: ex.id, exId: ex.id, partials: ex._partial, index: i }));
+  wrap.append(panel('p-replyblocks', 'p-reply', 'Reply', `· ${content.length} block${content.length === 1 ? '' : 's'}` + (ex.ended_at ? '' : ' · streaming…'),
+    blocks.length ? blocks : h('div', { class: 'muted' }, ex.ended_at ? 'No content blocks.' : 'Waiting for the first token…')));
+  if (ex.response_body != null && !(ex.response_body && ex.response_body.type === 'message'))
+    wrap.append(panel('p-respbody', 'p-neutral', 'Response body', null, typeof ex.response_body === 'string' ? longText(ex.response_body, `x${ex.id}/rb`, 'mono') : jsonView(ex.response_body, `x${ex.id}/rb`)));
+  const t = tok(ex), u = usage(ex);
+  const rows = hasUsage(ex) ? { input: fmtInt(t.input), output: fmtInt(t.out), 'cache read': fmtInt(t.cr), 'cache write': fmtInt(t.cw), 'prompt (input + cache read + cache write)': fmtInt(t.prompt), 'cache hit ratio (cache read / prompt)': fmtPct(t.hit), 'cost': fmtCost(ex.cost_usd) } : { usage: 'not available' };
+  wrap.append(panel('usage', 'p-reply', 'Usage', null, [kvTable(rows), Object.keys(u).length ? fold(`x${ex.id}/usageraw`, 'raw usage object', false, () => jsonView(u, `x${ex.id}/usagej`)) : null]));
+  return wrap;
+}
+
+function diffTab(ex) {
+  const { msgs } = parts(ex.request_body);
+  const c = ex.conversation;
+  if (!msgs || !c) return h('div', { class: 'empty' }, 'This request has no messages array to compare.');
+  const wrap = h('div', null);
+  let from = 0;
+  if (c.prev_id == null) {
+    wrap.append(h('div', { class: 'note' }, `First request of this conversation that the dashboard has seen (no earlier request with the same system prompt and message prefix). All ${msgs.length} messages are shown as new.`));
+  } else {
+    from = c.common_prefix;
+    const prev = h('a', { onclick: () => go(`#/exchange/${c.prev_id}/request`) }, `request #${c.prev_id}`);
+    if (c.common_prefix === c.prev_count)
+      wrap.append(h('div', { class: 'note' }, 'Compared with ', prev, ` (same system prompt, same message prefix). It sent ${c.prev_count} messages; this request resends all ${c.prev_count} of them unchanged (messages #0–#${c.prev_count - 1}) and adds ${msgs.length - from} new:`));
+    else
+      wrap.append(h('div', { class: 'note' }, 'Compared with ', prev, ` (same system prompt). The first ${c.common_prefix} of its ${c.prev_count} messages are resent unchanged; from message #${from} on, this request differs (history was edited or compacted). Messages from #${from}:`));
+  }
+  const fresh = msgs.slice(from);
+  wrap.append(panel('p-diffnew', 'p-new', 'New since the previous request', `· ${fresh.length} message${fresh.length === 1 ? '' : 's'}`,
+    fresh.length ? fresh.map((m, i) => msgCard(m, from + i, ex, { isNew: from + i === msgs.length - 1 })) : h('div', { class: 'muted' }, 'No new messages.')));
+  return wrap;
+}
+
+function rawSSE(ex) {
+  return (ex.response_events || []).map(e => (e.event ? `event: ${e.event}\n` : '') + 'data: ' + (typeof e.data === 'string' ? e.data : JSON.stringify(e.data))).join('\n\n');
+}
+function rawTab(ex) {
+  if (ex.events_omitted && !S.fetching.has(ex.id)) {
+    S.fetching.add(ex.id);
+    fetch(`/api/exchanges/${ex.id}`).then(r => r.ok ? r.json() : null).then(full => {
+      S.fetching.delete(ex.id);
+      const cur = S.ex.get(ex.id);
+      if (full && cur) { cur.response_events = full.response_events || []; cur._n = cur.response_events.length; cur.events_omitted = false; if (S.route.view === 'exchange' && S.route.id === ex.id) { S.dirty.detail = true; schedule(); } }
+    }).catch(() => S.fetching.delete(ex.id));
+  }
+  const key = `x${ex.id}/raw`;
+  const reqRaw = ex.request_body == null ? '' : typeof ex.request_body === 'string' ? ex.request_body : JSON.stringify(ex.request_body);
+  const sse = rawSSE(ex);
+  return h('div', null,
+    panel('raw-reqh', 'p-neutral', 'Request headers', '(secrets redacted)', kvTable(ex.request_headers, true)),
+    panel('raw-resh', 'p-neutral', 'Response headers', null, ex.response_headers ? kvTable(ex.response_headers, true) : h('div', { class: 'muted' }, 'Not received yet.')),
+    panel('raw-req', 'p-neutral', 'Raw request JSON', reqRaw ? `· ${fmtChars(reqRaw.length)} chars` : null, reqRaw ? [h('div', { style: 'text-align:right' }, copyBtn(() => reqRaw, 'copy raw request')), typeof ex.request_body === 'object' ? jsonView(ex.request_body, key + '/req') : longText(reqRaw, key + '/reqs', 'mono')] : h('div', { class: 'muted' }, 'No body.')),
+    panel('raw-sse', 'p-neutral', 'Raw SSE lines', `· ${(ex.response_events || []).length} events`, ex.events_omitted ? h('div', { class: 'muted' }, 'Loading…') : sse ? [h('div', { style: 'text-align:right' }, copyBtn(() => rawSSE(ex), 'copy SSE')), longText(sse, key + '/sse', 'mono')] : h('div', { class: 'muted' }, 'No SSE events (not a streaming reply).')),
+    ex.response_body != null ? panel('raw-resb', 'p-neutral', 'Raw response body', null, [h('div', { style: 'text-align:right' }, copyBtn(() => typeof ex.response_body === 'string' ? ex.response_body : JSON.stringify(ex.response_body), 'copy')), typeof ex.response_body === 'string' ? longText(ex.response_body, key + '/rb', 'mono') : jsonView(ex.response_body, key + '/rbj')]) : null);
+}
+
+function toolStats() {
+  const m = new Map();
+  for (const e of Object.values(S.tools)) {
+    const name = e.name || '(unknown)';
+    const s = m.get(name) || { name, calls: 0, errors: 0, sizeSum: 0, sizeN: 0, latSum: 0, latN: 0, pending: 0, noRes: 0 };
+    s.calls++; if (e.is_error) s.errors++;
+    if (e.result_size != null && e.status === 'paired') { s.sizeSum += e.result_size; s.sizeN++; }
+    if (e.latency_ms != null) { s.latSum += e.latency_ms; s.latN++; }
+    if (e.status === 'pending') s.pending++; if (e.status === 'no_result') s.noRes++;
+    m.set(name, s);
+  }
+  return [...m.values()].sort((a, b) => b.calls - a.calls);
+}
+function pairOrder(e) { return Math.max(e.call_exchange || 0, e.result_exchange || 0) * 1e6 + (e.seq || 0); }
+function toolsView(tool) {
+  const stats = toolStats();
+  const tbl = h('table', { class: 'grid' }, h('tr', null, h('th', null, 'tool'), h('th', { class: 'n' }, 'calls'), h('th', { class: 'n' }, 'errors'), h('th', { class: 'n' }, 'pending / no result'), h('th', { class: 'n' }, 'avg result size'), h('th', { class: 'n' }, 'avg call → result')));
+  for (const s of stats) tbl.appendChild(h('tr', { class: 'click' + (tool === s.name ? ' sel' : ''), style: tool === s.name ? 'background:var(--sel)' : null, onclick: () => go(tool === s.name ? '#/tools' : '#/tools/' + encodeURIComponent(s.name)) },
+    h('td', { class: 'toolname' }, s.name), h('td', { class: 'n' }, s.calls), h('td', { class: 'n', style: s.errors ? 'color:var(--err)' : null }, s.errors), h('td', { class: 'n' }, `${s.pending} / ${s.noRes}`),
+    h('td', { class: 'n' }, s.sizeN ? fmtChars(Math.round(s.sizeSum / s.sizeN)) + ' chars' : '—'), h('td', { class: 'n' }, s.latN ? fmtMs(s.latSum / s.latN) : '—')));
+  let pairs = Object.entries(S.tools);
+  if (tool) pairs = pairs.filter(([, e]) => (e.name || '(unknown)') === tool);
+  pairs.sort((a, b) => pairOrder(b[1]) - pairOrder(a[1]));
+  const LIMIT = 150;
+  const shown = S.open.get('tools/all') ? pairs : pairs.slice(0, LIMIT);
+  return h('div', null,
+    panel('tool-usage', 'p-tools', 'Tool usage', `· ${stats.length} tools · ${Object.keys(S.tools).length} calls`, [stats.length ? tbl : h('div', { class: 'muted' }, 'No tool calls yet.'),
+      h('div', { class: 'note small' }, 'Click a tool to list every call and its result. "avg call → result" runs from the end of the reply that asked for the tool to the start of the request that carries the result.')]),
+    panel('tool-pairs', 'p-tools', tool ? `Calls of ${tool}` : 'Every tool call beside its result', `· ${pairs.length} · newest first`,
+      [tool ? h('div', { class: 'note' }, h('a', { onclick: () => go('#/tools') }, '← all tools')) : null,
+        shown.length ? shown.map(([tid, e]) => pairRow(tid, `tools/${tid}`)) : h('div', { class: 'muted' }, 'None.'),
+        pairs.length > shown.length ? h('button', { onclick: () => { S.open.set('tools/all', true); S.dirty.detail = true; schedule(); } }, `Show all ${pairs.length}`) : null]));
+}
+
+function statView(metric, arg) {
+  if (metric === 'tools') return toolsView(null);
+  const api = [...S.ex.values()].filter(e => !isCheck(e)).sort((a, b) => b.id - a.id);
+  const defs = {
+    requests: ['Requests', api, e => fmtMs(e.timing && e.timing.total_ms), 'duration'],
+    prompt: ['prompt tokens (input + cache read + cache write)', api.filter(hasUsage), e => fmtInt(tok(e).prompt), 'prompt'],
+    output: ['output tokens', api.filter(hasUsage), e => fmtInt(tok(e).out), 'output'],
+    cache_read: ['cache read tokens', api.filter(hasUsage), e => fmtInt(tok(e).cr), 'cache read'],
+    cache_write: ['cache write tokens', api.filter(hasUsage), e => fmtInt(tok(e).cw), 'cache write'],
+    cost: ['Cost', api.filter(e => e.ended_at && hasUsage(e)), e => fmtCost(e.cost_usd), 'cost'],
+    wall: ['Wall clock (first request start → last reply end)', [...S.ex.values()].sort((a, b) => b.id - a.id), e => fmtMs(e.timing && e.timing.total_ms), 'duration'],
+    latency: ['Latency (successful requests)', api.filter(e => e.ended_at && !isError(e)), e => fmtMs(e.timing && e.timing.total_ms), 'total'],
+    cache_hit: ['Cache hit (cache read / prompt)', api.filter(hasUsage), e => fmtPct(tok(e).hit), 'cache hit'],
+    errors: ['Errors' + (arg ? ` with status ${arg}` : ''), [...S.ex.values()].filter(e => isError(e) && (!arg || String(e.status || 'proxy') === arg)).sort((a, b) => b.id - a.id), e => errorText(e), 'reason'],
+  };
+  const d = defs[metric];
+  if (!d) return h('div', { class: 'empty' }, 'Unknown statistic.');
+  const [title, rows, val, col] = d;
+  const tbl = h('table', { class: 'grid' }, h('tr', null, h('th', null, 'exchange'), h('th', null, 'time'), h('th', null, 'model'), h('th', null, 'stop / status'), h('th', { class: 'n' }, col)));
+  for (const e of rows) tbl.appendChild(h('tr', { class: 'click', onclick: () => go(`#/exchange/${e.id}/${metric === 'errors' ? 'reply' : 'request'}`) },
+    h('td', null, `#${e.id}`), h('td', null, fmtTime(e.started_at)), h('td', null, modelOf(e) || e.path), h('td', null, (e.assembled && e.assembled.stop_reason) || e.status || ''), h('td', { class: 'n' }, val(e))));
+  const s = sessionStats();
+  const totals = { prompt: fmtInt(s.prompt), output: fmtInt(s.output), cache_read: fmtInt(s.cr), cache_write: fmtInt(s.cw), cost: fmtCost(s.cost), cache_hit: fmtPct(s.hit), latency: fmtMs(s.avgLat) + ' average', wall: fmtMs(s.wall), requests: String(s.requests) };
+  return panel('stat', 'p-params', title, `· ${rows.length} exchange${rows.length === 1 ? '' : 's'}` + (totals[metric] ? ` · total ${totals[metric]}` : ''),
+    [h('div', { class: 'note small' }, 'Click a row to open the exchange; open any message from there for its full content and raw JSON.'), rows.length ? tbl : h('div', { class: 'muted' }, 'None.')]);
+}
+
+// ------------------------------------------------------------------ message drill-down (modal)
+function renderModal() {
+  const modal = document.getElementById('modal');
+  const r = S.route;
+  if (r.view !== 'exchange' || r.msg == null) { modal.classList.remove('on'); return; }
+  const ex = S.ex.get(r.id);
+  const mb = document.getElementById('mbody'), mt = document.getElementById('mtitle');
+  mb.textContent = '';
+  if (!ex) { modal.classList.remove('on'); return; }
+  let msg, title;
+  const { msgs } = parts(ex.request_body);
+  if (r.msg === 'reply') { msg = { role: 'assistant', content: (ex.assembled && ex.assembled.content) || [] }; title = `assistant · reply of exchange #${ex.id}`; }
+  else {
+    const i = Number(r.msg);
+    msg = msgs && msgs[i];
+    if (msg === undefined) { mt.textContent = 'Message not found'; mb.append(h('div', { class: 'empty' }, `Exchange #${ex.id} has no message #${r.msg}.`)); modal.classList.add('on'); return; }
+    title = `${normMsg(msg).role} #${i} · messages[${i}] (${i + 1} of ${msgs.length}) · request #${ex.id}` + (i === msgs.length - 1 ? ' · new message' : '');
+  }
+  mt.textContent = title;
+  const n = normMsg(msg);
+  mb.append(h('div', { class: 'note' }, `role: ${n.role} · ${n.content.length} content block${n.content.length === 1 ? '' : 's'}` + (typeof msg.content === 'string' ? ' (content is a plain string)' : '')));
+  n.content.forEach((b, j) => {
+    const t = b && b.type || 'text';
+    const rows = [];
+    const full = txt => h('div', { class: 'full' }, txt == null ? '' : String(txt));
+    if (t === 'text') rows.push(full(b.text));
+    else if (/tool_use$/.test(t)) rows.push(kvTable({ id: b.id, name: b.name }), h('div', { class: 'h3' }, 'input'), jsonView(b.input == null ? {} : b.input, `modal/${r.id}/${r.msg}/${j}/in`));
+    else if (t === 'tool_result') {
+      rows.push(kvTable({ tool_use_id: b.tool_use_id, is_error: !!b.is_error, size: fmtChars(contentSize(b.content)) + ' chars' }), h('div', { class: 'h3' }, 'content'));
+      if (typeof b.content === 'string') rows.push(full(b.content));
+      else if (Array.isArray(b.content)) b.content.forEach((c, k) => rows.push(c && c.type === 'text' ? full(c.text) : c && c.type === 'image' ? imageInfo(c) : jsonView(c, `modal/${r.id}/${r.msg}/${j}/c${k}`)));
+      else rows.push(jsonView(b.content, `modal/${r.id}/${r.msg}/${j}/c`));
+      if (S.tools[b.tool_use_id]) rows.push(h('div', { class: 'h3' }, 'paired call'), pairRow(b.tool_use_id, `modal/${r.id}/${r.msg}/${j}/pair`));
+    } else if (t === 'thinking') rows.push(full(b.thinking));
+    else if (t === 'image' || t === 'document') rows.push(imageInfo(b));
+    else rows.push(jsonView(b, `modal/${r.id}/${r.msg}/${j}`));
+    if (b && b.cache_control) rows.push(h('div', null, 'cache_control marker: ', h('span', { class: 'mono' }, JSON.stringify(b.cache_control))));
+    mb.append(h('div', { class: 'mblock' }, h('div', { style: 'margin-bottom:4px' }, badge(t), `block ${j}`), rows));
+  });
+  if (msg && msg.cache_control) mb.append(h('div', null, 'message cache_control: ', JSON.stringify(msg.cache_control)));
+  mb.append(h('div', { class: 'h3' }, 'Raw JSON ', copyBtn(() => JSON.stringify(msg), 'copy raw JSON')), jsonView(msg, `modal/${r.id}/${r.msg}/raw`));
+  modal.classList.add('on');
+}
+function closeModal() { const r = S.route; if (r.view === 'exchange' && r.msg != null) go(`#/exchange/${r.id}/${r.msg === 'reply' ? 'reply' : 'request'}`); }
+
+// ------------------------------------------------------------------ routing
+function route() {
+  const p = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+  let r = { view: 'none' };
+  if (p[0] === 'exchange' && p[1]) {
+    const id = Number(p[1]);
+    if (p[2] === 'message') r = { view: 'exchange', id, tab: p[3] === 'reply' ? 'reply' : 'request', msg: p[3] };
+    else r = { view: 'exchange', id, tab: ['request', 'reply', 'diff', 'raw'].includes(p[2]) ? p[2] : 'request' };
+    S.sel = id; S.tab = r.tab;
+  } else if (p[0] === 'tools') r = { view: 'tools', tool: p[1] || null };
+  else if (p[0] === 'stats' && p[1]) r = { view: 'stat', metric: p[1], arg: p[2] || null };
+  S.route = r;
+  S.dirty.list = true; S.dirty.detail = true;
+  flushNow();
+  const row = r.view === 'exchange' && document.querySelector(`#list .row[data-id="${r.id}"]`);
+  if (row && row.scrollIntoViewIfNeeded) row.scrollIntoViewIfNeeded(false); else if (row) row.scrollIntoView({ block: 'nearest' });
+}
+function flushNow() { flush(); }
+
+// ------------------------------------------------------------------ wiring
+document.getElementById('pause').onclick = () => {
+  S.paused = !S.paused;
+  if (!S.paused) { const q = S.queue; S.queue = []; for (const [n, d] of q) dispatch(n, d); }
+  updatePauseBtn();
+};
+document.getElementById('clear').onclick = () => { if (confirm('Clear all exchanges from the server buffer?')) fetch('/api/clear', { method: 'POST' }).catch(() => {}); };
+document.getElementById('toolsbtn').onclick = () => go('#/tools');
+let filterT;
+document.getElementById('filter').oninput = e => { clearTimeout(filterT); filterT = setTimeout(() => { S.filter = e.target.value.trim().toLowerCase(); S.dirty.list = true; schedule(); }, 150); };
+document.getElementById('hidechecks').onchange = e => { S.hideChecks = e.target.checked; S.dirty.list = true; schedule(); };
+document.getElementById('banner-x').onclick = () => { document.getElementById('banner').style.display = 'none'; };
+document.getElementById('mclose').onclick = closeModal;
+document.getElementById('modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
+document.addEventListener('keydown', e => {
+  if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') { closeModal(); return; }
+  const ids = S.visibleIds;
+  if (['ArrowDown', 'ArrowUp', 'j', 'k'].includes(e.key) && ids.length) {
+    e.preventDefault();
+    let i = S.route.view === 'exchange' ? ids.indexOf(S.route.id) : -1;
+    i = (e.key === 'ArrowDown' || e.key === 'j') ? Math.min(ids.length - 1, i + 1) : Math.max(0, i - 1);
+    go(`#/exchange/${ids[i]}/${['request', 'reply', 'diff', 'raw'].includes(S.tab) ? S.tab : 'request'}`);
+  } else if (/^[1-4]$/.test(e.key) && S.sel != null) go(`#/exchange/${S.sel}/${TABS[Number(e.key) - 1][0]}`);
+  else if (e.key === 't') go('#/tools');
+});
+window.addEventListener('hashchange', route);
+route();
+connect();
+</script>
+</body>
+</html>

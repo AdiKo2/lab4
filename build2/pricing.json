@@ -1,0 +1,13 @@
+{
+  "_comment": "USD per million tokens. Keys are model ids; a request's model matches a key exactly, or after removing a trailing -YYYYMMDD date. Unlisted models show '—' (no guessed price). Edit freely: the file is re-read when it changes. Verify these numbers against the current Anthropic price list before relying on them.",
+  "models": {
+    "claude-opus-4-5":   { "input": 5.0,  "output": 25.0, "cache_read": 0.50, "cache_write": 6.25 },
+    "claude-opus-4-1":   { "input": 15.0, "output": 75.0, "cache_read": 1.50, "cache_write": 18.75 },
+    "claude-opus-4":     { "input": 15.0, "output": 75.0, "cache_read": 1.50, "cache_write": 18.75 },
+    "claude-sonnet-4-5": { "input": 3.0,  "output": 15.0, "cache_read": 0.30, "cache_write": 3.75 },
+    "claude-sonnet-4":   { "input": 3.0,  "output": 15.0, "cache_read": 0.30, "cache_write": 3.75 },
+    "claude-3-7-sonnet": { "input": 3.0,  "output": 15.0, "cache_read": 0.30, "cache_write": 3.75 },
+    "claude-haiku-4-5":  { "input": 1.0,  "output": 5.0,  "cache_read": 0.10, "cache_write": 1.25 },
+    "claude-3-5-haiku":  { "input": 0.80, "output": 4.0,  "cache_read": 0.08, "cache_write": 1.00 }
+  }
+}
