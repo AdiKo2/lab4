@@ -25,7 +25,7 @@ Three more from-scratch builds of v1 took about 25 minutes each. They were teste
 
 ## v3: What builds 1 and A-C showed (`13838de`)
 
-Based on the open gaps in `notes.md` and on `laptop-2/findings.md`. No build of v3 exists yet, so these changes haven't been tested.
+Based on the open gaps in `notes.md` and on `laptop-2/findings.md`. No build of v3 exists, so these changes haven't been tested.
 
 | What the builds showed | Change to the spec |
 |---|---|
@@ -39,6 +39,23 @@ Based on the open gaps in `notes.md` and on `laptop-2/findings.md`. No build of 
 | The fake upstream missed the row-click crash, and builds took about 25 minutes (gap 10). | §9.1: how to test. M5 becomes optional. |
 | The right side was empty with nothing selected (gap 6). | §6.1: select the newest exchange. |
 | Interesting traffic was only in the notes. | New §12: findings in the traffic. |
+
+## Build 2 of v2 (`792a207`)
+
+Build 2 was generated from scratch from v2. Its commit message says only that, and it led to no spec change recorded here.
+
+## v4: Fix contradictions found reviewing v3 (`9490201`)
+
+This change came from reading v3 against itself, plus one difference between builds A and B, not from a new build. No build of v4 exists.
+
+| Problem | Change to the spec |
+|---|---|
+| A failed `HEAD` check matched both the check-row and error-row rules. | §6.1: the check-row rule wins, and it isn't counted in Errors. |
+| "Retry" meant two things. | §6.7: "no new messages". §6.11 owns "retry", including chains. |
+| Session totals didn't say what counts. | §6.5: model calls, errors and checks are separate. |
+| `tool_updated` overlapped `tool_paired`. | §5: pairing uses only `tool_paired`. |
+| Clearing during a stream was undefined. | §5: the exchange leaves the buffer, and forwarding continues. |
+| §3 still said the proxy is identical to `proxy.py`. | §3 points to the listed differences. |
 
 ## Why we stopped regenerating
 
