@@ -23,8 +23,9 @@ The dashboard must show:
    - **Tool definitions:** every tool's name, description and input schema.
    - **The conversation so far:** all earlier messages that the request
      resends.
-   - **The new message:** what was added this turn, either the user's new
-     prompt or the tool results being returned.
+   - **The new message:** the last entry in `messages`, either the user's new
+     prompt or the tool results being returned. The Diff view (§6.7) shows
+     everything added since the previous request.
 3. **The reply:** the model's text and the tool calls it asks for (see §6.3).
 4. **Tool calls, each beside its result.** A tool call (`tool_use`) appears in
    one reply, and its result (`tool_result`) arrives in a *later* request. The
@@ -76,6 +77,7 @@ The dashboard must show:
 | `dashboard.py`   | Proxy, event bus, dashboard server, and stream parser. |
 | `dashboard.html` | The UI, served by `dashboard.py`.                    |
 | `pricing.json`   | Editable price per million tokens for each model (§6.5). |
+| `tests/`         | A fake upstream and the checks described in §9.1.    |
 
 ### 3.2 CLI
 
@@ -83,10 +85,12 @@ The dashboard must show:
 python3 dashboard.py [--port 8041] [--ui-port 8042] [--upstream URL] [--quiet]
 ```
 
-- `--quiet`: turns off terminal printing. Without it, the program prints the
-  same output as `proxy.py`.
+- `--quiet`: turns off traffic printing only. The startup lines always print.
+  Without it, traffic output matches `proxy.py`, except that cookies are
+  redacted (§7).
 - On startup it prints both URLs and the line
-  `ANTHROPIC_BASE_URL=http://localhost:8041 claude`.
+  `ANTHROPIC_BASE_URL=http://localhost:<port> claude`, using the actual port.
+- `--buffer N`: optional size of the ring buffer (§4), default 200.
 
 ## 4. Data model
 
@@ -120,6 +124,20 @@ buffer that holds the last 200 exchanges by default.
 }
 ```
 
+Rules for these fields:
+
+- **`error`** is set for every failed exchange: the upstream is unreachable or
+  drops, the reply is HTTP 4xx/5xx, the stream carries an SSE error event, or
+  the stream ends without its final event. `status` keeps the real upstream
+  status, and stays `null` if the upstream never answered.
+- **`response_body`** is an added field that holds a reply that isn't a stream.
+- **Nothing stored is cut.** Bodies are kept whole. Only the ring buffer limits
+  memory.
+- **`ttfb_ms`** runs from receiving the request to the upstream headers.
+- **`ttft_ms`** runs to the first non-empty text, thinking or tool-input delta.
+  It is `null` for replies that aren't streamed.
+- **Ids** keep rising, and never reset on clear.
+
 Tool calls are paired with their results in a separate index, keyed by the
 `tool_use` id:
 
@@ -146,8 +164,16 @@ SSE events, all with a JSON payload:
 | `exchange_response`  | upstream status and headers arrive    | id, status, headers                   |
 | `exchange_delta`     | each parsed upstream SSE event        | id, raw event                         |
 | `exchange_done`      | stream ends                           | id, ended_at, assembled               |
-| `exchange_error`     | upstream fails or the client drops    | id, message                           |
+| `exchange_error`     | the exchange failed (§4) or the client drops | id, message, ended_at, partial assembled |
 | `tool_paired`        | a request carries a `tool_result` for an earlier `tool_use` | tool_use_id, call exchange id, result exchange id, result |
+| `tool_updated`       | a call is added or its status changes | the tool index entry                  |
+| `exchange_evicted`   | the ring buffer drops an exchange     | id                                    |
+| `cleared`            | `POST /api/clear` empties the buffer  | none                                  |
+
+- **One ending:** each exchange ends with exactly one of `exchange_done` or
+  `exchange_error`, and either one stops the row's spinner.
+- **Lost events:** a subscriber that lost events (§8) gets a fresh `snapshot`,
+  so a dropped ending can't leave a row spinning.
 
 Other endpoints on :8042:
 - `GET /`: serves `dashboard.html`.
@@ -160,8 +186,11 @@ Other endpoints on :8042:
 ### 6.1 Layout
 - **Left side:** a list of exchanges, newest at the top, that updates live.
   Each row shows the id, time, model, status, duration, prompt/output tokens
-  (as defined in §6.5), cache hit %, and the stop reason. While a reply is
-  still streaming, the row shows a spinner.
+  (as defined in §6.5), cost, cache hit %, and the stop reason. While a reply
+  is still streaming, the row shows a spinner.
+  - **Selection:** when nothing is selected, the newest exchange is selected
+    automatically. Once the user picks a row, new traffic doesn't change the
+    selection.
   - **Requests with no body** (for example Claude Code's `HEAD /api/hello`
     connection checks) are shown as a single dimmed line with only the id,
     time, method, path, status and duration. They show no token, cache or
@@ -181,9 +210,10 @@ shown as its own visually separate panel, following the formatting rules in
 §6.10.
 
 1. **System instructions:** the full text of the `system` field (all of its
-   blocks), with its character and approximate token count. Because it is
-   long, it follows the long-text rule (§6.10.1): it starts as a preview, and
-   one click shows all of it, never truncated.
+   blocks), with its character and approximate token count (characters ÷ 4).
+   The long-text rule (§6.10.1) applies to each block separately: a long block
+   starts as a preview, and one click shows all of it, never truncated. A
+   short block is shown in full.
 2. **Tool definitions:** every entry in `tools`, showing its name and full
    description, with its input schema expandable. A total count is shown.
 3. **Conversation so far:** every message in `messages` except the last one,
@@ -194,14 +224,18 @@ shown as its own visually separate panel, following the formatting rules in
 
 In both message sections, `tool_use` and `tool_result` blocks get distinct
 styling, and blocks with a `cache_control` marker are flagged.
-- **Other parameters:** `model`, `max_tokens`, `thinking`, `temperature`,
-  `metadata`, and so on, shown as a small table.
+
+**Other parameters** is a separate fifth panel after the four parts, outside
+their index: `model`, `max_tokens`, `thinking`, `temperature`, `metadata`, and
+so on, shown as a small table.
 
 ### 6.3 Reply tab
-- **The model's text** appears live as it streams.
+- **The model's text** appears live as it streams. A block stays open while
+  it streams. Viewed later, it follows the long-text rule (§6.10.1).
 - **Tool calls the model asks for:** each `tool_use` block is shown with its
   tool name, its `id`, and its input, pretty-printed. The input arrives in
   pieces (`input_json_delta`) and is assembled before it is displayed.
+  Until then the call shows "receiving input… N chars", never partial JSON.
   - Each tool call links to its result (§6.4). Until the result arrives, the
     call is marked *pending*.
 - **Blocks in order:** text, tool-call and thinking blocks are shown in the
@@ -214,11 +248,14 @@ styling, and blocks with a `cache_control` marker are flagged.
 ### 6.4 Tool calls beside their results
 - **Pairing:** each `tool_use` block in a reply has an `id`. A later request
   contains a `tool_result` block whose `tool_use_id` matches it. The server
-  pairs them by this id, across exchanges.
+  pairs them by this id, across exchanges. The first request that carries a
+  result does the pairing. `server_tool_use` blocks are shown in the reply but
+  aren't paired.
 - **Side-by-side view:** each pair is shown on one row.
   - Left: the tool call, with its name and input.
   - Right: the result, with its content, an `is_error` flag shown as a red
-    marker, and its size.
+    marker, and its size (characters of text, plus JSON length for non-text
+    blocks).
   - Labels show which exchange each side came from (e.g. "reply #12 →
     request #13"), and clicking either side jumps to that exchange.
 - **Where pairs appear:**
@@ -226,16 +263,32 @@ styling, and blocks with a `cache_control` marker are flagged.
   - In the Request tab, beside each `tool_result` in the new message.
   - In a **Tools** view that lists every pair in the session, newest first.
 - **Call without a result:** if no matching result has arrived yet, the call is
-  shown as *pending*. If the conversation moves on without one, it is shown as
-  *no result*.
+  shown as *pending*. It becomes *no result* when a later model call in the same
+  conversation (§6.7) has the call in its history, and the message after the
+  call has no `tool_result` with that id.
+  - A retry of the same request doesn't count.
+  - A result that arrives later still turns the call into *paired*.
+  - If compaction rewrites the history, this can't be detected, so the call
+    stays *pending*.
 - **Live update:** when a later request brings the result, the open pair
   updates in place.
 
 ### 6.5 Statistics
 Statistics are shown alongside the messages. They never replace them.
 
-- **Per request:** these numbers appear in the list row and in a stats strip in
-  the detail view.
+- **Definitions:**
+  - **Model call:** a POST that carries `messages` (or Codex `input` and
+    `model`), excluding `count_tokens`.
+  - **Session:** what is in the buffer now, since the last clear. Totals can
+    shrink when old exchanges are evicted, and the summary says when that has
+    happened.
+  - **Cache hit:** `cache read / prompt`, weighted by tokens over a session.
+  - **Output tokens per second:** `output / (total duration - time to first token)`.
+  - **Wall-clock time:** first start to last end.
+  - **Average latency:** mean total duration of model calls only, so connection
+    checks don't distort it.
+- **Per request:** the list row shows the fields in §6.1. A stats strip in the
+  detail view shows all of these numbers.
   - Tokens: input, output, cache read, cache write.
   - **One meaning per label, everywhere** (list row, stats strip, session
     summary):
@@ -261,9 +314,15 @@ Statistics are shown alongside the messages. They never replace them.
     end of the reply to the start of the request that carries the result.
 - **Cost calculation:**
   - The formula uses `usage` and a pricing table:
-    `input × in_price + output × out_price + cache_read × read_price + cache_write × write_price`.
+    `input × in_price + output × out_price + cache_read × read_price + cache_write_5m × write_5m_price + cache_write_1h × write_1h_price`.
+  - **Cache writes:** when `usage.cache_creation` splits writes into 5-minute
+    and 1-hour parts, use that split. Otherwise, price all writes at the
+    5-minute rate.
+  - **Long-context prices** (such as a higher rate above 100k tokens) aren't
+    modeled, so the cost is labelled as an estimate.
   - The pricing table is a small editable file (`pricing.json`, priced per
-    million tokens, one entry per model).
+    million tokens, one entry per model). A model matches exactly, or after
+    removing a `-YYYYMMDD` suffix.
   - Models that aren't in the table show "—" instead of a guessed price.
 - **Statistics link back to messages:** clicking any statistic shows the
   exchanges behind it. For example, clicking the "Bash" row in tool usage lists
@@ -271,7 +330,7 @@ Statistics are shown alongside the messages. They never replace them.
 
 ### 6.6 Drill-down (every message is openable)
 - **Opening a message:** every message, in both the request and the reply, can
-  be opened.
+  be opened. Long text in an opened message starts expanded.
   - Each one shows its role and position in `messages`.
   - It lists every content block, with that block's type and details:
     - text: the full text
@@ -280,16 +339,29 @@ Statistics are shown alongside the messages. They never replace them.
     - images: the media type and size
     - thinking: the full content
     - `cache_control` markers
-  - Its exact raw JSON can be viewed, with a copy button.
+  - Its raw JSON can be viewed, with a copy button. This is the parsed value
+    re-serialized compactly. The Raw tab (§6.8) keeps the original request
+    text.
 - **Nothing is truncated:** in a collapsed view, text may be shortened with
   "…". Opening it always shows the full content.
 - **Linking:** each exchange and message has a stable link, such as
-  `#/exchange/13/message/42`.
+  `#/exchange/13/message/42`. Message positions start at 0. The reply's link is
+  `#/exchange/13/message/reply`.
 
 ### 6.7 Diff view (the main learning feature)
 - Compares the selected request with the previous request from the same
   conversation. A conversation is identified by matching system prompt and
   message prefix.
+- **Matching rules:**
+  - Ignore `cache_control`, because Claude Code moves it between requests.
+  - Skip the per-request billing-header block in `system`.
+  - Treat a plain string and a single text block as equal.
+- **Previous request:** the nearest earlier model call whose messages are a
+  prefix of this one, skipping failed attempts.
+- **Edge cases:**
+  - A resend with no new messages is labelled a retry.
+  - If older messages changed, compare with the longest shared prefix and show
+    a warning.
 - Shows only the messages that are new since that previous request, so it is
   clear that the harness resends the entire history on every turn.
 
@@ -306,8 +378,8 @@ Statistics are shown alongside the messages. They never replace them.
 - **What counts as long:** text over 12 lines or 1,000 characters. This
   applies to system blocks, message text, tool results, thinking, and JSON
   strings.
-- **Collapsed:** long text starts collapsed, showing the first 6 lines and a
-  fade at the bottom.
+- **Collapsed:** long text starts collapsed, showing the first 6 visual lines
+  after wrapping and a fade at the bottom, so one huge line also collapses.
   - A toggle shows the size, such as **"Show all (342 lines, 18.2k chars)"**.
   - The toggle becomes **"Collapse"** once the text is open.
 - **Expanded:** shows the full text, never truncated, keeping whitespace and
@@ -315,7 +387,8 @@ Statistics are shown alongside the messages. They never replace them.
   sideways scrolling.
 - **Expand all / Collapse all:** each panel and each tab has these controls.
 - **State is kept:** what is open or closed stays that way while new events
-  stream in and when you switch between exchanges.
+  stream in and when you switch between exchanges. State is stored per exchange
+  and per block, and lasts until the page is reloaded.
 - **Short text** is shown in full, with no toggle.
 
 #### 6.10.2 JSON is readable
@@ -325,8 +398,9 @@ Statistics are shown alongside the messages. They never replace them.
   their own color.
 - **Collapsible tree:** every object and array can fold. A folded node shows a
   summary, such as `{…} 5 keys` or `[…] 12 items`.
-  - Nodes deeper than 2 levels start folded.
-- **JSON inside strings:** a string that is itself valid JSON gets a "format"
+  - The root is level 0. Levels 0 to 2 start open, and deeper nodes start
+    folded.
+- **JSON inside strings:** a string that parses to a JSON object or array gets a "format"
   toggle that shows it parsed. Tool results are often like this.
 - **Long string values** follow the long-text rule (§6.10.1).
 - **Copy button:** each JSON block has one that copies exact, unformatted
@@ -371,10 +445,14 @@ Statistics are shown alongside the messages. They never replace them.
 
 ## 7. Security and privacy
 
-- **Redaction:** `authorization`, `x-api-key` and `cookie` headers are
-  redacted before they are stored, showing only the first 16 characters then
-  `...`. They are still forwarded to the upstream unchanged.
-- **Local only:** both servers bind to `127.0.0.1`, never `0.0.0.0`.
+- **Redaction:** `authorization`, `x-api-key`, `cookie`, `set-cookie` and
+  `proxy-authorization` headers are redacted before they are stored or printed,
+  showing only the first 16 characters then `...`. A secret of 16 characters or
+  fewer shows only `...`. They are still forwarded to the upstream unchanged.
+- **Request bodies aren't redacted:** a secret inside a body is shown as sent.
+- **Local only:** both servers bind to `127.0.0.1`, never `0.0.0.0`. The
+  dashboard server rejects a non-localhost `Host`, and a non-localhost `Origin`
+  on POST.
 - **Warning in the UI:** a banner says that conversation contents are shown in
   full, so the user should be careful when sharing screenshots or exports.
 
@@ -382,7 +460,11 @@ Statistics are shown alongside the messages. They never replace them.
 
 - The proxy must not change requests or responses. Headers pass through except
   hop-by-hop headers, and `accept-encoding` is dropped so the reply comes back
-  as readable plain text.
+  as readable plain text. It keeps `proxy.py`'s behavior, including adding
+  `Connection: close`.
+- One deliberate difference from `proxy.py`: if the upstream fails after
+  connecting but before answering, the client gets a 502 and the error is
+  recorded.
 - Bytes are streamed to the client as they arrive, using `read1`. The
   dashboard must never delay forwarding:
   - Publishing to the event bus must not block. Each subscriber has a bounded
@@ -400,7 +482,7 @@ Statistics are shown alongside the messages. They never replace them.
    works exactly as it does through `proxy.py`.
 2. Opening `http://localhost:8042` and sending a prompt in Claude Code makes a
    new row appear within about 200 ms, and the reply text streams into the
-   Response tab.
+   Reply tab.
 3. A turn that uses a tool shows the `tool_use` block in one exchange and the
    matching `tool_result` in the next. The diff view shows only those new
    messages.
@@ -443,6 +525,27 @@ Statistics are shown alongside the messages. They never replace them.
 15. The same token label shows the same number in the row, the stats strip
     and (summed) the session summary. For example, the summary's `prompt`
     equals the sum of the rows' `prompt`.
+16. With live traffic, the Diff view of a later request in a conversation shows
+    only the new messages, even when `cache_control` moved between requests.
+17. Every exchange ends with exactly one of `exchange_done` or `exchange_error`.
+    No row keeps spinning after a failure.
+18. A call whose conversation moved on without a result shows *no result*, and
+    a result that arrives later turns it into *paired*.
+19. A long live session that goes through compaction keeps working. Calls whose
+    history was rewritten stay *pending*, and the page shows no errors.
+
+### 9.1 How to test
+
+1. **Fake upstream:** a small fake model API in `tests/`, for fast checks that
+   spend no tokens. This alone isn't enough: it didn't catch the row-click crash
+   in build 1.
+2. **Real browser:** check the page in a real browser, as AC12 requires.
+3. **Live traffic:** run one real session by hand before calling a build done.
+   ACs 12, 13, 14, 16 and 19 need live traffic.
+
+Keep tests small: about one check per acceptance criterion. In builds A to C,
+test code was about as large as the product, and each build took about 25
+minutes.
 
 ## 10. Milestones
 
@@ -451,12 +554,30 @@ Statistics are shown alongside the messages. They never replace them.
 2. **M2:** parse the upstream stream and show live response text and usage.
 3. **M3:** build the Request tab (system prompt, tools, messages timeline).
 4. **M4:** add the diff view, filter, pause and export.
-5. **M5:** polish: keyboard navigation, dark mode, and testing with Codex
-   (`--upstream`).
+5. **M5 (optional, only after M1 to M4 work on live traffic):** polish:
+   keyboard navigation, dark mode, and testing with Codex (`--upstream`).
 
 ## 11. Open questions
 
-- Should the in-memory buffer also be written to disk (JSONL) so history
-  survives a restart?
-- Is a separate UI port acceptable, or should the dashboard sit under a
-  reserved path on 8041 (such as `/__dash`) so there is only one port?
+- **Snapshot size:** every request carries the full system prompt and tools, so
+  200 exchanges can be tens of MB. Against a fake upstream, a 41 MB snapshot
+  barely affected forwarding (median 1.8 ms against 1.3 ms). If reloads are slow
+  on live traffic, send summaries in the snapshot and load details through
+  `/api/exchanges/<id>`.
+
+Decided: no disk persistence, and the UI keeps its separate port.
+
+## 12. Findings in the traffic
+
+Seen on live traffic through build 1, unless noted:
+
+- **429 before requests:** each real request first failed with 429 and was sent
+  again a few seconds later, with a `HEAD /api/hello` check before each attempt.
+  This may depend on the account's limits at the time.
+- **Prompt caching:** request #9 wrote about 36k tokens to the cache (0% hit,
+  $0.185). Request #11 resent about the same 36k with a 98% hit for $0.022,
+  about 8 times cheaper.
+- **Small side request:** request #10 (156 tokens) may serve a side purpose such
+  as a session title. This hasn't been confirmed.
+- **`cache_control` moves between requests:** seen with a real `claude` client
+  against a fake upstream, not yet on live traffic.
