@@ -141,7 +141,7 @@ SSE events, all with a JSON payload:
 
 | event                | when                                  | payload                               |
 |----------------------|---------------------------------------|---------------------------------------|
-| `snapshot`           | right after the browser connects      | list of all exchanges in the buffer   |
+| `snapshot`           | right after the browser connects      | `{exchanges: [...], tools: {...}}`: every exchange in the buffer plus the tool-pair index, so a reload restores the pairs too |
 | `exchange_started`   | a request reaches the proxy           | id, time, method, path, headers, body |
 | `exchange_response`  | upstream status and headers arrive    | id, status, headers                   |
 | `exchange_delta`     | each parsed upstream SSE event        | id, raw event                         |
@@ -159,9 +159,17 @@ Other endpoints on :8042:
 
 ### 6.1 Layout
 - **Left side:** a list of exchanges, newest at the top, that updates live.
-  Each row shows the id, time, model, status, duration, input/output tokens,
-  cache hit %, and the stop reason. While a reply is still streaming, the row
-  shows a spinner.
+  Each row shows the id, time, model, status, duration, prompt/output tokens
+  (as defined in §6.5), cache hit %, and the stop reason. While a reply is
+  still streaming, the row shows a spinner.
+  - **Requests with no body** (for example Claude Code's `HEAD /api/hello`
+    connection checks) are shown as a single dimmed line with only the id,
+    time, method, path, status and duration. They show no token, cache or
+    cost fields. A "hide checks" toggle in the list header hides them; it is
+    on by default.
+  - **Error rows** (status 4xx/5xx or a proxy error) show a short reason
+    instead of the token fields, e.g. `429 rate limited · retry after 6s`
+    (see §6.11).
 - **Right side:** details of the selected exchange, in the tabs described below.
 - **Top bar:** connection status (live or reconnecting), a pause/resume
   button (while paused, new events are buffered and not shown), a clear
@@ -229,6 +237,14 @@ Statistics are shown alongside the messages. They never replace them.
 - **Per request:** these numbers appear in the list row and in a stats strip in
   the detail view.
   - Tokens: input, output, cache read, cache write.
+  - **One meaning per label, everywhere** (list row, stats strip, session
+    summary):
+    - `input` = `usage.input_tokens` only (the uncached part, often tiny).
+    - `prompt` = input + cache read + cache write (everything the model read).
+    - `output` = `usage.output_tokens`.
+    - The list row shows `prompt` and `output`. The session summary shows
+      `prompt`, `output`, `cache read` and `cache write`, with the same
+      labels. A label never means a different sum in two places.
   - Cost: estimated in USD.
   - Time:
     - total duration
@@ -340,6 +356,19 @@ Statistics are shown alongside the messages. They never replace them.
 - **Safe rendering:** all content is shown as text, never as HTML. Model
   output and tool results may contain markup, which is displayed, not run.
 
+### 6.11 Errors and retries
+- **Reason, not just a code:** for any 4xx/5xx reply, the row and the top of
+  the Reply tab show the error `type` and `message` from the response body
+  (e.g. `rate_limit_error: …`).
+- **Rate limits (429):** also show the `retry-after` header and any
+  `anthropic-ratelimit-*` headers (limit, remaining, reset) as a small table
+  in the Reply tab.
+- **Retries are linked:** a request whose body is identical to an earlier
+  failed request is labelled "retry of #N" in its row, and the failed one
+  is labelled "retried by #M". Clicking the label jumps to the other one.
+- **Session summary:** the Errors count is split by status (e.g.
+  `429 × 4`), and clicking it lists those exchanges.
+
 ## 7. Security and privacy
 
 - **Redaction:** `authorization`, `x-api-key` and `cookie` headers are
@@ -401,6 +430,19 @@ Statistics are shown alongside the messages. They never replace them.
       header.
     - A tool result that contains `<script>` is shown as plain text and is
       not run.
+12. **No crashes in the page:** with live traffic, clicking any row and
+    opening each of the Request, Reply, Diff and Raw tabs, and the Tools
+    view, shows content, and the browser console shows no errors. This is
+    checked in a real browser (not only with `curl`) before a build is
+    called done.
+13. `HEAD /api/hello` checks are hidden by default, and when shown they
+    appear as dimmed one-line rows without token or cost fields.
+14. A 429 reply shows `rate_limit_error`, its message and the retry-after
+    value in its row and in the Reply tab, and the request that retried it
+    is labelled "retry of #N".
+15. The same token label shows the same number in the row, the stats strip
+    and (summed) the session summary. For example, the summary's `prompt`
+    equals the sum of the rows' `prompt`.
 
 ## 10. Milestones
 
