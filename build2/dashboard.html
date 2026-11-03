@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent traffic</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --panel2: #f9fafb; --fg: #1d2330; --muted: #6b7280; --border: #e2e5ea;
+  --sel: #e7efff; --hover: #f1f4f9;
+  --c-sys: #7c3aed; --c-tools: #0d9488; --c-conv: #2563eb; --c-new: #ea580c; --c-reply: #16a34a; --c-params: #64748b;
+  --c-err: #dc2626; --c-warn: #b45309; --c-ok: #16a34a;
+  --j-key: #7e22ce; --j-str: #15803d; --j-num: #b45309; --j-bool: #1d4ed8; --j-null: #6b7280;
+  --user-bg: #eef4ff; --asst-bg: #f3fbf5; --other-bg: #f6f6f6;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+:root[data-theme="dark"] {
+  --bg: #0e1117; --panel: #161b22; --panel2: #1b212b; --fg: #e6e8eb; --muted: #9aa4b2; --border: #2b323d;
+  --sel: #1d2b47; --hover: #1c232e;
+  --c-sys: #a78bfa; --c-tools: #2dd4bf; --c-conv: #60a5fa; --c-new: #fb923c; --c-reply: #4ade80; --c-params: #94a3b8;
+  --c-err: #f87171; --c-warn: #fbbf24; --c-ok: #4ade80;
+  --j-key: #c4b5fd; --j-str: #86efac; --j-num: #fbbf24; --j-bool: #93c5fd; --j-null: #9ca3af;
+  --user-bg: #152238; --asst-bg: #13261b; --other-bg: #1e1e1e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1117; --panel: #161b22; --panel2: #1b212b; --fg: #e6e8eb; --muted: #9aa4b2; --border: #2b323d;
+    --sel: #1d2b47; --hover: #1c232e;
+    --c-sys: #a78bfa; --c-tools: #2dd4bf; --c-conv: #60a5fa; --c-new: #fb923c; --c-reply: #4ade80; --c-params: #94a3b8;
+    --c-err: #f87171; --c-warn: #fbbf24; --c-ok: #4ade80;
+    --j-key: #c4b5fd; --j-str: #86efac; --j-num: #fbbf24; --j-bool: #93c5fd; --j-null: #9ca3af;
+    --user-bg: #152238; --asst-bg: #13261b; --other-bg: #1e1e1e;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+a { color: var(--c-conv); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button:hover { background: var(--hover); }
+button.mini { font-size: 11px; padding: 1px 7px; }
+button.on { background: var(--sel); border-color: var(--c-conv); }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 11px; }
+
+#banner { background: #fff7e0; color: #7a5300; border-bottom: 1px solid #f2d58a; padding: 4px 12px; font-size: 12px; display: flex; gap: 10px; align-items: center; }
+:root[data-theme="dark"] #banner { background: #2b2410; color: #f5d27a; border-color: #4d4019; }
+#banner button { margin-left: auto; }
+
+#top { display: flex; gap: 8px; align-items: center; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+#top .brand { font-weight: 700; margin-right: 6px; }
+#filter { flex: 1; min-width: 200px; max-width: 460px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel2); color: var(--fg); font: inherit; }
+.conn { font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); }
+.conn.live { color: var(--c-ok); border-color: var(--c-ok); }
+.conn.down { color: var(--c-warn); border-color: var(--c-warn); }
+.conn::before { content: "●  "; }
+#top .spacer { flex: 1; }
+
+#summary { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; background: var(--panel2); border-bottom: 1px solid var(--border); align-items: center; }
+.stat { display: inline-flex; flex-direction: column; padding: 2px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); cursor: pointer; min-width: 70px; }
+.stat:hover { border-color: var(--c-conv); }
+.stat .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat.err .v { color: var(--c-err); }
+
+main { flex: 1; display: flex; min-height: 0; }
+#listpane { width: 400px; min-width: 300px; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
+.listhead { display: flex; gap: 10px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+#list { overflow-y: auto; flex: 1; }
+.row { padding: 5px 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.row:hover { background: var(--hover); }
+.row.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--c-conv); }
+.row .l1, .row .l2 { display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+.row .l2 { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.row .id { font-weight: 600; font-variant-numeric: tabular-nums; }
+.row .model { overflow: hidden; text-overflow: ellipsis; }
+.row .dur { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+.row .reason { color: var(--c-err); overflow: hidden; text-overflow: ellipsis; }
+.row.check { opacity: .55; font-size: 12px; padding: 2px 10px; display: flex; gap: 8px; white-space: nowrap; }
+.row.check .dur { margin-left: auto; }
+.st { font-size: 11px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.st.ok { color: var(--c-ok); border-color: var(--c-ok); }
+.st.bad { color: #fff; background: var(--c-err); border-color: var(--c-err); }
+.lnk { font-size: 11px; }
+.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--c-reply); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#detail { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#dhead { background: var(--panel); border-bottom: 1px solid var(--border); padding: 8px 14px 0; }
+#dbody { flex: 1; overflow-y: auto; padding: 12px 14px 40px; }
+.dtitle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.dtitle .big { font-weight: 700; }
+.strip { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0; }
+.strip .stat { min-width: 60px; padding: 1px 8px; }
+.tabs { display: flex; gap: 2px; margin-top: 4px; }
+.tabs button { border-radius: 6px 6px 0 0; border-bottom: none; padding: 4px 14px; background: transparent; }
+.tabs button.on { background: var(--bg); border-color: var(--border); font-weight: 600; }
+.tabs button.reply { color: var(--c-reply); }
+.tabs .keys { margin-left: auto; align-self: center; }
+.empty { color: var(--muted); padding: 40px; text-align: center; }
+.errbox { border: 1px solid var(--c-err); border-left-width: 4px; background: color-mix(in srgb, var(--c-err) 8%, var(--panel)); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
+.errbox h3 { margin: 0 0 4px; font-size: 14px; color: var(--c-err); }
+.render-error { color: var(--c-err); font-family: var(--mono); white-space: pre-wrap; padding: 10px; }
+
+.toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.toolbar .xbar { margin-left: auto; }
+.xbar { display: inline-flex; gap: 4px; }
+.index { display: flex; gap: 6px; flex-wrap: wrap; }
+.index button { border-left: 3px solid var(--accent, var(--border)); }
+
+.panel { --accent: var(--border); background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; margin-bottom: 18px; }
+.panel > .phead { position: sticky; top: -12px; z-index: 2; background: var(--panel); display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+.panel > .phead .pt { font-weight: 700; color: var(--accent); }
+.panel > .phead .xbar { margin-left: auto; }
+.panel > .mount { padding: 10px 12px; }
+.p-sys { --accent: var(--c-sys); } .p-tools { --accent: var(--c-tools); } .p-conv { --accent: var(--c-conv); }
+.p-new { --accent: var(--c-new); } .p-reply { --accent: var(--c-reply); } .p-params { --accent: var(--c-params); }
+.p-new { box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-new) 25%, transparent); }
+
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.prose { white-space: pre-wrap; overflow-wrap: anywhere; }
+.clamp { max-height: 8.6em; overflow: hidden; position: relative; }
+.clamp::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; background: linear-gradient(transparent, var(--fade, var(--panel))); }
+.long > button.more { margin-top: 4px; font-size: 11px; padding: 1px 8px; }
+.sysblock { margin-bottom: 12px; }
+.sysblock .lab, .tooldef .lab { font-size: 11px; color: var(--muted); margin-bottom: 3px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tooldef { border-top: 1px solid var(--border); padding: 8px 0; }
+.tooldef:first-child { border-top: none; padding-top: 0; }
+.tooldef .tn { font-weight: 700; font-family: var(--mono); color: var(--c-tools); }
+
+.msg { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; --fade: var(--msg-bg); }
+.msg.user { --msg-bg: var(--user-bg); background: var(--user-bg); margin-right: 40px; }
+.msg.assistant { --msg-bg: var(--asst-bg); background: var(--asst-bg); margin-left: 40px; }
+.msg.other { --msg-bg: var(--other-bg); background: var(--other-bg); }
+.msg > .mh { display: flex; gap: 8px; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.msg > .mh .role { font-weight: 700; }
+.msg.user .role { color: var(--c-conv); } .msg.assistant .role { color: var(--c-reply); }
+.msg > .mh .open { margin-left: auto; }
+.msg > .mb { padding: 6px 10px; }
+.blk { padding: 5px 0; border-top: 1px dashed var(--border); }
+.blk:first-child { border-top: none; }
+.blk-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 3px; font-size: 12px; }
+.badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 0 6px; border-radius: 4px; border: 1px solid currentColor; font-family: var(--mono); }
+.badge.text { color: var(--muted); } .badge.thinking { color: var(--c-sys); }
+.badge.tool_use { color: var(--c-tools); } .badge.tool_result { color: var(--c-new); }
+.badge.image, .badge.document { color: var(--c-warn); }
+.flag { font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.flag.cache { background: color-mix(in srgb, var(--c-sys) 15%, transparent); color: var(--c-sys); }
+.flag.err { background: var(--c-err); color: #fff; font-weight: 700; }
+.chip { font-size: 11px; padding: 0 6px; border-radius: 8px; border: 1px solid; }
+.chip.pending { color: var(--c-warn); } .chip.paired { color: var(--c-ok); } .chip.no_result { color: var(--muted); }
+.partial { color: var(--muted); }
+
+.pair { border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; background: var(--panel); --fade: var(--panel); }
+.pair-flow { font-size: 11px; padding: 3px 10px; border-bottom: 1px solid var(--border); color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.pair-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.pair-call, .pair-result { padding: 6px 10px; min-width: 0; }
+.pair-call { border-right: 1px solid var(--border); border-top: 3px solid var(--c-tools); }
+.pair-result { border-top: 3px solid var(--c-new); }
+.pair-result.err { border-top-color: var(--c-err); background: color-mix(in srgb, var(--c-err) 6%, var(--panel)); }
+.pair-result.pending, .pair-result.no_result { color: var(--muted); font-style: italic; }
+.pair-label { font-size: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+
+.json { position: relative; font-family: var(--mono); font-size: 12px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; --fade: var(--panel2); }
+.json-tools { position: absolute; right: 4px; top: 4px; z-index: 1; }
+.j-kids { padding-left: 2ch; border-left: 1px dotted var(--border); margin-left: .3ch; }
+.j-row { overflow-wrap: anywhere; }
+.j-key { color: var(--j-key); } .j-str { color: var(--j-str); white-space: pre-wrap; overflow-wrap: anywhere; } .j-num { color: var(--j-num); }
+.j-bool { color: var(--j-bool); } .j-null { color: var(--j-null); } .j-punc { color: var(--muted); }
+.j-tog { cursor: pointer; color: var(--muted); display: inline-block; width: 1.4ch; user-select: none; }
+.j-sum { cursor: pointer; color: var(--muted); font-style: italic; }
+.j-strblock { display: block; padding-left: 1ch; border-left: 2px solid var(--j-str); margin: 2px 0; color: var(--j-str); }
+.fmt { margin-bottom: 3px; }
+
+table.kv { border-collapse: collapse; width: 100%; font-size: 12px; }
+table.kv td, table.kv th { border-bottom: 1px solid var(--border); padding: 3px 8px; text-align: left; vertical-align: top; }
+table.kv th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+table.kv td.num, table.kv th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.kv tr.click { cursor: pointer; } table.kv tr.click:hover td { background: var(--hover); }
+table.kv tr.on td { background: var(--sel); }
+.usage { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+.usage .stat { cursor: default; }
+.diffbar { display: flex; flex-wrap: wrap; gap: 2px; margin: 8px 0; }
+.diffbar span { width: 10px; height: 14px; border-radius: 2px; background: var(--border); }
+.diffbar span.new { background: var(--c-new); }
+.disclose { cursor: pointer; font-size: 12px; color: var(--muted); user-select: none; }
+
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 30px; }
+#modal[hidden] { display: none; }
+#modal .box { background: var(--bg); border-radius: 10px; width: min(1100px, 100%); max-height: 100%; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.35); }
+#modal .mhead { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 14px; display: flex; gap: 10px; align-items: center; z-index: 3; }
+#modal .mcontent { padding: 14px; }
+#modal .blockcard { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; --fade: var(--panel); }
+h4 { margin: 14px 0 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="banner">⚠ This page shows conversation contents in full (system prompt, files, tool output). Be careful when sharing screenshots or exports. <button class="mini" id="banner-x">dismiss</button></div>
+<header id="top">
+  <span class="brand">Agent traffic</span>
+  <span id="conn" class="conn down">connecting…</span>
+  <button id="pause" title="Pause (p): buffer new events without showing them">Pause</button>
+  <span id="paused-n" class="muted small"></span>
+  <button id="clear" title="Empty the buffer">Clear</button>
+  <a id="export" href="/api/export" download><button tabindex="-1">Export</button></a>
+  <input id="filter" placeholder="Filter by path, model or text   ( / )" autocomplete="off">
+  <span class="spacer"></span>
+  <button id="toolsbtn" title="Every tool call beside its result (t)">Tools</button>
+  <button id="theme" title="Light / dark">◐</button>
+</header>
+<section id="summary"></section>
+<main>
+  <aside id="listpane">
+    <div class="listhead"><label><input type="checkbox" id="hidechecks" checked> hide checks</label><span id="listcount"></span><span style="margin-left:auto" class="small">j/k to move</span></div>
+    <div id="list"></div>
+  </aside>
+  <section id="detail"><div id="dhead"></div><div id="dbody"></div></section>
+</main>
+<div id="modal" hidden><div class="box"><div class="mhead" id="mhead"></div><div class="mcontent" id="mcontent"></div></div></div>
+
+<script>
+'use strict';
+
+// ===================================================================== helpers
+const $ = (sel) => document.querySelector(sel);
+
+// Builds DOM. Content always goes in as text nodes, never as HTML.
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      const v = attrs[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'style') el.style.cssText = v;
+      else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  addKids(el, kids);
+  return el;
+}
+function addKids(el, kids) {
+  for (const k of kids) {
+    if (k == null || k === false) continue;
+    if (Array.isArray(k)) addKids(el, k);
+    else el.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+}
+function link(text, href, cls) {
+  return h('a', { href, class: cls, onclick: (e) => e.stopPropagation() }, text);
+}
+const fmtInt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+function fmtN(n) {
+  if (n == null) return '—';
+  if (n < 1000) return String(n);
+  if (n < 100000) return (n / 1000).toFixed(1) + 'k';
+  if (n < 1e6) return Math.round(n / 1000) + 'k';
+  return (n / 1e6).toFixed(2) + 'M';
+}
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  const m = Math.floor(ms / 60000), s = Math.round((ms % 60000) / 1000);
+  return `${m}m${String(s).padStart(2, '0')}s`;
+}
+function fmtUsd(v) {
+  if (v == null) return '—';
+  return '$' + (v < 1 ? v.toFixed(4) : v.toFixed(2));
+}
+const fmtPct = (r) => (r == null ? '—' : Math.round(r * 100) + '%');
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleTimeString('en-GB', { hour12: false });
+}
+function hdr(headers, name) {
+  if (!headers) return null;
+  name = name.toLowerCase();
+  for (const k of Object.keys(headers)) if (k.toLowerCase() === name) return headers[k];
+  return null;
+}
+function countLines(s) {
+  let n = 1, i = -1;
+  while ((i = s.indexOf('\n', i + 1)) !== -1) n++;
+  return n;
+}
+const isLong = (s) => s.length > 1000 || countLines(s) > 12;
+function safeStringify(v, indent) {
+  try { const s = JSON.stringify(v, null, indent); return s === undefined ? String(v) : s; }
+  catch (e) { return String(v); }
+}
+function tryJson(s) {
+  if (typeof s !== 'string') return undefined;
+  const t = s.trim();
+  if (t.length < 2 || t.length > 5e6 || (t[0] !== '{' && t[0] !== '[')) return undefined;
+  try { const v = JSON.parse(t); return v && typeof v === 'object' ? v : undefined; }
+  catch (e) { return undefined; }
+}
+function copyText(text, btn) {
+  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'copied ✓'; setTimeout(() => { btn.textContent = o; }, 1200); } };
+  const fallback = () => {
+    const ta = h('textarea', { style: 'position:fixed;opacity:0' });
+    ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    ta.remove(); done();
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+}
+function copyBtn(getText, label) {
+  const b = h('button', { class: 'mini', title: 'Copy exact text' }, label || 'copy');
+  b.addEventListener('click', (e) => { e.stopPropagation(); copyText(getText(), b); });
+  return b;
+}
+
+// ================================================================== state
+const state = {
+  ex: new Map(),        // id -> exchange
+  tools: {},            // tool_use id -> pair entry
+  bufferSize: 200,
+  rev: 0, toolsRev: 0,
+  paused: false, pending: [],
+  filter: '', hideChecks: true,
+  tab: 'request',
+  route: { view: 'empty' },
+  live: false,
+};
+// Open/closed state of every collapsible, by stable key. Survives re-renders
+// and switching between exchanges.
+const openState = new Map();
+const isOpen = (key, def) => (openState.has(key) ? openState.get(key) : def);
+const setOpen = (key, v) => openState.set(key, v);
+
+// ============================================================ applying events
+// Same rules as apply_patch() in dashboard.py.
+function applyPatch(a, p) {
+  if (!a.content) a.content = [];
+  const c = a.content;
+  switch (p.op) {
+    case 'meta': for (const k of Object.keys(p.set)) if (p.set[k] != null) a[k] = p.set[k]; break;
+    case 'usage': a.usage = a.usage || {}; for (const k of Object.keys(p.set)) if (p.set[k] != null) a.usage[k] = p.set[k]; break;
+    case 'block': while (c.length <= p.i) c.push({ type: 'unknown' }); c[p.i] = Object.assign({}, p.block); break;
+    case 'append': if (c[p.i]) c[p.i][p.field] = (c[p.i][p.field] || '') + p.text; break;
+    case 'field': if (c[p.i]) c[p.i][p.field] = p.value; break;
+    case 'finish': if (c[p.i]) { c[p.i].input = p.input; delete c[p.i]._partial_json; } break;
+    case 'error': a.error = p.error; break;
+  }
+}
+function addEx(x) {
+  x.response_events = x.response_events || [];
+  x.assembled = x.assembled || { content: [] };
+  x.assembled.content = x.assembled.content || [];
+  x.timing = x.timing || {};
+  x.request_headers = x.request_headers || {};
+  x.response_headers = x.response_headers || {};
+  x.rev = 0;
+  state.ex.set(x.id, x);
+  while (state.ex.size > state.bufferSize) state.ex.delete(state.ex.keys().next().value);
+}
+function upd(id, fn) {
+  const ex = state.ex.get(id);
+  if (!ex) return;
+  fn(ex);
+  ex.rev++;
+}
+function applyEvent(name, d) {
+  switch (name) {
+    case 'snapshot':
+      state.ex = new Map();
+      state.bufferSize = d.buffer_size || 200;
+      for (const x of d.exchanges || []) addEx(x);
+      state.tools = d.tools || {};
+      state.toolsRev++;
+      break;
+    case 'exchange_started': addEx(d); break;
+    case 'exchange_response':
+      upd(d.id, (ex) => { ex.status = d.status; ex.reason = d.reason; ex.response_headers = d.headers || {}; Object.assign(ex.timing, d.timing || {}); });
+      break;
+    case 'exchange_delta':
+      upd(d.id, (ex) => {
+        ex.response_events.push(d.event);
+        for (const p of d.patches || []) applyPatch(ex.assembled, p);
+        if (d.timing) Object.assign(ex.timing, d.timing);
+      });
+      break;
+    case 'exchange_done':
+      upd(d.id, (ex) => {
+        ex.ended_at = d.ended_at;
+        if (d.status != null) ex.status = d.status;
+        if (d.assembled) ex.assembled = d.assembled;
+        ex.assembled.content = ex.assembled.content || [];
+        if (d.timing) ex.timing = d.timing;
+        ex.cost_usd = d.cost_usd;
+        ex.error_info = d.error_info;
+        ex.response_body = d.response_body;
+      });
+      break;
+    case 'exchange_error':
+      upd(d.id, (ex) => { ex.error = d.message; ex.ended_at = d.ended_at; if (d.timing) ex.timing = d.timing; });
+      break;
+    case 'exchange_meta':
+      upd(d.id, (ex) => { for (const k of Object.keys(d)) if (k !== 'id') ex[k] = d[k]; });
+      break;
+    case 'tool_paired':
+    case 'tool_update':
+      if (d.entry) state.tools[d.tool_use_id] = d.entry;
+      state.toolsRev++;
+      break;
+    case 'cleared':
+      state.ex = new Map(); state.tools = {}; state.toolsRev++;
+      break;
+  }
+  state.rev++;
+}
+
+const EVENTS = ['snapshot', 'exchange_started', 'exchange_response', 'exchange_delta', 'exchange_done',
+  'exchange_error', 'exchange_meta', 'tool_paired', 'tool_update', 'cleared'];
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => { state.live = true; renderConn(); };
+  es.onerror = () => { state.live = false; renderConn(); };
+  for (const name of EVENTS) {
+    es.addEventListener(name, (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (e) { console.warn('bad event', name, e); return; }
+      if (state.paused) { state.pending.push([name, data]); renderPause(); return; }
+      applyEvent(name, data);
+      schedule();
+    });
+  }
+}
+
+// ================================================================ data views
+const isCheck = (ex) => ex.kind === 'check';
+const isStreaming = (ex) => !ex.ended_at && !ex.error;
+function tok(ex) {
+  const u = ex.assembled && ex.assembled.usage;
+  if (!u) return null;
+  const input = u.input_tokens || 0, cacheRead = u.cache_read_input_tokens || 0;
+  const cacheWrite = u.cache_creation_input_tokens || 0, output = u.output_tokens || 0;
+  const prompt = input + cacheRead + cacheWrite;
+  return { input, cacheRead, cacheWrite, prompt, output, hit: prompt ? cacheRead / prompt : null };
+}
+function modelOf(ex) {
+  const b = ex.request_body;
+  return (ex.assembled && ex.assembled.model) || (b && typeof b === 'object' && b.model) || '';
+}
+const shortModel = (m) => String(m || '').replace(/^claude-/, '');
+function durationMs(ex) {
+  if (ex.timing && ex.timing.total_ms != null) return ex.timing.total_ms;
+  const t = Date.parse(ex.started_at);
+  return isNaN(t) ? null : Date.now() - t;
+}
+function tokPerSec(ex) {
+  const t = tok(ex), tm = ex.timing || {};
+  if (!t || !t.output || !tm.total_ms) return null;
+  // Speed while tokens stream. When the reply arrives in one burst (e.g. after
+  // hidden thinking) that window is too short to measure, so use the total.
+  const win = tm.ttft_ms != null ? tm.total_ms - tm.ttft_ms : 0;
+  return t.output / ((win >= 250 ? win : tm.total_ms) / 1000);
+}
+function isFailed(ex) { return !!(ex.error || ex.error_info || (ex.status != null && ex.status >= 400)); }
+function errorReason(ex) {
+  if (ex.error) return 'proxy error: ' + ex.error;
+  const info = ex.error_info;
+  if (!(ex.status >= 400) && !info) return null;
+  let s = ex.status != null ? String(ex.status) : 'stream error';
+  if (info && (info.type || info.message)) s += ' ' + [info.type, info.message].filter(Boolean).join(': ');
+  else if (ex.status === 429) s += ' rate limited';
+  else if (ex.reason) s += ' ' + ex.reason;
+  const ra = (info && info.retry_after) || hdr(ex.response_headers, 'retry-after');
+  if (ra) s += ` · retry after ${ra}${/^\d+(\.\d+)?$/.test(String(ra)) ? 's' : ''}`;
+  return s;
+}
+function errorKey(ex) { return ex.error ? 'proxy' : String(ex.status != null && ex.status >= 400 ? ex.status : 'stream'); }
+
+// Splits a request body into system / tools / messages / other params.
+// Anthropic Messages and OpenAI Responses (Codex) bodies both map onto this.
+const normCache = new WeakMap();
+function toBlocks(c) {
+  if (c == null) return [];
+  if (typeof c === 'string') return [{ type: 'text', text: c }];
+  if (Array.isArray(c)) return c.map((x) => (typeof x === 'string' ? { type: 'text', text: x } : x));
+  return [{ type: 'unknown', value: c }];
+}
+function parseArgs(s) {
+  if (typeof s !== 'string') return s == null ? {} : s;
+  try { return JSON.parse(s); } catch (e) { return { _raw: s }; }
+}
+function codexMsg(it, i) {
+  if (!it || typeof it !== 'object') return { role: '?', index: i, content: toBlocks(it), raw: it };
+  const t = it.type || (it.role ? 'message' : 'unknown');
+  let role = it.role || 'item', content;
+  if (t === 'message') {
+    content = toBlocks(it.content).map((c) => {
+      if (c && (c.type === 'input_text' || c.type === 'output_text')) return { type: 'text', text: c.text };
+      if (c && c.type === 'input_image') return { type: 'image', source: { type: 'url', url: c.image_url } };
+      return c;
+    });
+  } else if (t === 'function_call' || t === 'custom_tool_call') {
+    role = 'assistant';
+    content = [{ type: 'tool_use', id: it.call_id, name: it.name, input: t === 'function_call' ? parseArgs(it.arguments) : { _raw: it.input } }];
+  } else if (t === 'function_call_output' || t === 'custom_tool_call_output') {
+    role = 'user';
+    content = [{ type: 'tool_result', tool_use_id: it.call_id, content: it.output }];
+  } else if (t === 'reasoning') {
+    role = 'assistant';
+    content = [{ type: 'thinking', thinking: (it.summary || []).map((s) => s && s.text).filter(Boolean).join('\n') }];
+  } else {
+    content = [Object.assign({}, it, { type: t })];
+  }
+  return { role, index: i, content, raw: it };
+}
+function normalize(ex) {
+  if (normCache.has(ex)) return normCache.get(ex);
+  const b = ex.request_body;
+  const r = { kind: 'other', system: [], tools: [], messages: [], params: {} };
+  if (b && typeof b === 'object' && !Array.isArray(b)) {
+    if (Array.isArray(b.messages) || b.system !== undefined) {
+      r.kind = 'anthropic';
+      const s = b.system;
+      r.system = s == null ? [] : typeof s === 'string' ? [{ type: 'text', text: s }] : Array.isArray(s) ? toBlocks(s) : [{ type: 'unknown', value: s }];
+      r.tools = Array.isArray(b.tools) ? b.tools : [];
+      r.messages = (Array.isArray(b.messages) ? b.messages : []).map((m, i) => ({
+        role: (m && m.role) || '?', index: i, content: toBlocks(m && m.content), raw: m }));
+      for (const k of Object.keys(b)) if (!['system', 'tools', 'messages'].includes(k)) r.params[k] = b[k];
+    } else if (Array.isArray(b.input) || b.instructions !== undefined) {
+      r.kind = 'codex';
+      r.system = b.instructions ? [{ type: 'text', text: String(b.instructions) }] : [];
+      r.tools = (Array.isArray(b.tools) ? b.tools : []).map((t) => ({
+        name: t.name || t.type, type: t.type, description: t.description, input_schema: t.parameters || t.format, raw: t }));
+      r.messages = (Array.isArray(b.input) ? b.input : []).map(codexMsg);
+      for (const k of Object.keys(b)) if (!['instructions', 'tools', 'input'].includes(k)) r.params[k] = b[k];
+    } else {
+      r.params = b;
+    }
+  }
+  normCache.set(ex, r);
+  return r;
+}
+function textLen(blocks) {
+  let n = 0;
+  for (const b of blocks) n += b && typeof b.text === 'string' ? b.text.length : safeStringify(b).length;
+  return n;
+}
+function contentSize(c) {
+  if (c == null) return 0;
+  if (typeof c === 'string') return c.length;
+  if (Array.isArray(c)) return c.reduce((n, b) => n + (b && b.type === 'text' ? (b.text || '').length : safeStringify(b).length), 0);
+  return safeStringify(c).length;
+}
+// Messages without cache_control, so a moved cache breakpoint doesn't look like a change.
+function stripCache(v) {
+  if (Array.isArray(v)) return v.map(stripCache);
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) if (k !== 'cache_control') o[k] = stripCache(v[k]);
+    return o;
+  }
+  return v;
+}
+const canonCache = new WeakMap();
+function canon(ex) {
+  if (canonCache.has(ex)) return canonCache.get(ex);
+  const n = normalize(ex);
+  const c = {
+    system: safeStringify(stripCache(n.system)),
+    tools: safeStringify(stripCache(n.tools.map((t) => t.raw || t))),
+    msgs: n.messages.map((m) => safeStringify(stripCache(m.raw))),
+  };
+  canonCache.set(ex, c);
+  return c;
+}
+// The previous request of the same conversation: same system prompt, and its
+// messages are a prefix of this one's.
+function findPrevious(ex) {
+  const me = canon(ex), kind = normalize(ex).kind;
+  if (!me.msgs.length) return null;
+  let best = null, bestLoose = null;
+  const ids = [...state.ex.keys()].filter((id) => id < ex.id).sort((a, b) => b - a);
+  for (const id of ids) {
+    const o = state.ex.get(id);
+    if (isCheck(o) || normalize(o).kind !== kind) continue;
+    const c = canon(o);
+    if (!c.msgs.length || c.msgs.length > me.msgs.length) continue;
+    let k = 0;
+    while (k < c.msgs.length && c.msgs[k] === me.msgs[k]) k++;
+    if (k !== c.msgs.length) continue;
+    if (c.system === me.system) { best = o; break; }
+    if (!bestLoose) bestLoose = o;
+  }
+  const prev = best || bestLoose;
+  return prev ? { prev, sameSystem: !!best, k: canon(prev).msgs.length } : null;
+}
+
+// ========================================================= display components
+// Long text (> 12 lines or > 1000 chars) starts as a 6-line preview.
+function longText(text, key, defOpen, cls) {
+  text = text == null ? '' : String(text);
+  cls = cls || 'pre';
+  if (!isLong(text)) return h('div', { class: cls }, text);
+  const wrap = h('div', { class: 'long', dataset: { ckey: key, cdef: defOpen ? '1' : '0' } });
+  const lines = countLines(text);
+  const draw = () => {
+    const open = isOpen(key, !!defOpen);
+    const preview = text.split('\n', 6).join('\n').slice(0, 1500) + ' …';
+    wrap.replaceChildren(
+      h('div', { class: open ? cls : cls + ' clamp' }, open ? text : preview),
+      h('button', { class: 'more', onclick: (e) => { e.stopPropagation(); setOpen(key, !open); draw(); } },
+        open ? 'Collapse' : `Show all (${fmtInt(lines)} lines, ${fmtN(text.length)} chars)`));
+  };
+  draw();
+  return wrap;
+}
+// Text that may itself be JSON gets a "format" toggle.
+function textOrJson(text, key, defOpen, cls) {
+  const parsed = tryJson(text);
+  if (parsed === undefined) return longText(text, key, defOpen, cls);
+  const fk = key + ':fmt';
+  const wrap = h('div');
+  const draw = () => {
+    const on = isOpen(fk, false);
+    wrap.replaceChildren(
+      h('button', { class: 'mini fmt', onclick: (e) => { e.stopPropagation(); setOpen(fk, !on); draw(); } }, on ? 'show raw text' : '{ } format JSON'),
+      on ? jsonView(parsed, fk + ':j', { copy: text }) : longText(text, key, defOpen, cls));
+  };
+  draw();
+  return wrap;
+}
+// Pretty, colored, foldable JSON. Nodes deeper than 2 levels start folded.
+function jsonView(value, key, opts) {
+  opts = opts || {};
+  const raw = opts.copy !== undefined ? opts.copy : safeStringify(value);
+  return h('div', { class: 'json' }, h('div', { class: 'json-tools' }, copyBtn(() => raw, 'copy')),
+    jsonNode(value, key, 0, opts.openDepth == null ? 2 : opts.openDepth));
+}
+function jsonNode(v, key, depth, openDepth) {
+  if (v === null || v === undefined) return h('span', { class: 'j-null' }, 'null');
+  const t = typeof v;
+  if (t === 'number') return h('span', { class: 'j-num' }, String(v));
+  if (t === 'boolean') return h('span', { class: 'j-bool' }, String(v));
+  if (t === 'string') {
+    if (isLong(v) || tryJson(v) !== undefined) return h('span', { class: 'j-strblock' }, textOrJson(v, key + ':s', false, 'j-str'));
+    return h('span', { class: 'j-str' }, JSON.stringify(v));
+  }
+  if (t !== 'object') return h('span', null, String(v));
+  const isArr = Array.isArray(v);
+  const keys = isArr ? null : Object.keys(v);
+  const n = isArr ? v.length : keys.length;
+  const o = isArr ? '[' : '{', c = isArr ? ']' : '}';
+  if (n === 0) return h('span', { class: 'j-punc' }, o + c);
+  const defOpen = depth <= openDepth;
+  const node = h('span', { dataset: { ckey: key, cdef: defOpen ? '1' : '0' } });
+  const draw = () => {
+    const open = isOpen(key, defOpen);
+    const toggle = (e) => { e.stopPropagation(); setOpen(key, !open); draw(); };
+    const tog = h('span', { class: 'j-tog', onclick: toggle }, open ? '▾' : '▸');
+    if (!open) {
+      const what = isArr ? (n === 1 ? 'item' : 'items') : (n === 1 ? 'key' : 'keys');
+      node.replaceChildren(tog, h('span', { class: 'j-sum', onclick: toggle }, `${o}…${c} ${n} ${what}`));
+      return;
+    }
+    const kids = h('div', { class: 'j-kids' });
+    for (let i = 0; i < n; i++) {
+      const k = isArr ? i : keys[i];
+      kids.append(h('div', { class: 'j-row' },
+        isArr ? null : [h('span', { class: 'j-key' }, JSON.stringify(k)), h('span', { class: 'j-punc' }, ': ')],
+        jsonNode(v[k], key + '/' + k, depth + 1, openDepth),
+        i < n - 1 ? h('span', { class: 'j-punc' }, ',') : null));
+    }
+    node.replaceChildren(tog, h('span', { class: 'j-punc' }, o), kids, h('span', { class: 'j-punc' }, c));
+  };
+  draw();
+  return node;
+}
+// A container that can re-render itself (for Expand all / Collapse all).
+function mount(fn) {
+  const el = h('div', { class: 'mount' });
+  el.render = () => {
+    try { el.replaceChildren(); addKids(el, [fn(el)]); }
+    catch (e) { console.error(e); el.replaceChildren(h('div', { class: 'render-error' }, 'Could not render this part: ' + e.message)); }
+  };
+  el.render();
+  return el;
+}
+function expandIn(el, open) {
+  for (let pass = 0; pass < (open ? 6 : 1); pass++) {
+    let changed = false;
+    for (const n of el.querySelectorAll('[data-ckey]')) {
+      if (isOpen(n.dataset.ckey, n.dataset.cdef === '1') !== open) { setOpen(n.dataset.ckey, open); changed = true; }
+    }
+    if (!changed) break;
+    el.render();
+  }
+}
+function expandBar(getEl) {
+  return h('span', { class: 'xbar' },
+    h('button', { class: 'mini', onclick: (e) => { e.stopPropagation(); expandIn(getEl(), true); } }, 'Expand all'),
+    h('button', { class: 'mini', onclick: (e) => { e.stopPropagation(); expandIn(getEl(), false); } }, 'Collapse all'));
+}
+function panel(cls, id, title, count, bodyFn) {
+  const body = mount(bodyFn);
+  return h('section', { class: 'panel ' + cls, id },
+    h('div', { class: 'phead' }, h('span', { class: 'pt' }, title), count != null ? h('span', { class: 'muted' }, count) : null, expandBar(() => body)),
+    body);
+}
+function disclose(key, label, defOpen, bodyFn) {
+  const wrap = h('div', { dataset: { ckey: key, cdef: defOpen ? '1' : '0' } });
+  const draw = () => {
+    const open = isOpen(key, defOpen);
+    wrap.replaceChildren(
+      h('div', { class: 'disclose', onclick: (e) => { e.stopPropagation(); setOpen(key, !open); draw(); } }, (open ? '▾ ' : '▸ ') + label));
+    if (open) addKids(wrap, [bodyFn()]);
+  };
+  draw();
+  return wrap;
+}
+const badge = (type) => h('span', { class: 'badge ' + String(type).replace(/[^a-z_]/gi, '') }, type);
+function cacheFlag(b) {
+  if (!b || !b.cache_control) return null;
+  const cc = b.cache_control;
+  return h('span', { class: 'flag cache', title: 'cache_control breakpoint: the prompt is cached up to here' },
+    '⚑ cache_control: ' + (cc.type || '') + (cc.ttl ? ' ' + cc.ttl : ''));
+}
+const msgHash = (exId, mi) => (mi == null ? `#/exchange/${exId}/request` : `#/exchange/${exId}/message/${mi}`);
+function statusChip(entry) {
+  if (!entry) return null;
+  const label = { pending: 'pending', paired: 'paired', no_result: 'no result' }[entry.status] || entry.status;
+  return h('span', { class: 'chip ' + (entry.status || '') }, label);
+}
+function b64Size(data) { return data ? Math.floor((data.length * 3) / 4) : 0; }
+function mediaInfo(b) {
+  const s = b.source || {};
+  const parts = [s.media_type || '', s.type === 'base64' ? fmtN(b64Size(s.data)) + 'B' : s.type === 'url' ? s.url : s.type || ''];
+  if (b.title) parts.push(b.title);
+  return parts.filter(Boolean).join(' · ');
+}
+function blk(type, meta, ...body) {
+  return h('div', { class: 'blk' }, h('div', { class: 'blk-head' }, badge(type), meta), body);
+}
+// One content block of a message.
+function blockView(ex, b, key, ctx) {
+  ctx = ctx || {};
+  if (!b || typeof b !== 'object') return blk('unknown', null, jsonView(b, key));
+  const t = b.type || 'unknown';
+  const cc = cacheFlag(b);
+  switch (t) {
+    case 'text':
+      return blk('text', [cc, b.citations ? h('span', { class: 'muted small' }, `${b.citations.length} citations`) : null],
+        textOrJson(b.text, key, ctx.textOpen, 'prose'));
+    case 'thinking': {
+      const txt = b.thinking || '';
+      const label = txt ? `thinking · ${fmtN(txt.length)} chars` : 'thinking · empty (display omitted)';
+      return blk('thinking', [cc, b.signature ? h('span', { class: 'muted small' }, `signature ${fmtN(b.signature.length)} chars`) : null],
+        disclose(key + ':th', label, !!ctx.modal, () => longText(txt, key + ':tt', true, 'prose')));
+    }
+    case 'redacted_thinking':
+      return blk(t, [cc, h('span', { class: 'muted small' }, `redacted · ${fmtN((b.data || '').length)} chars`)]);
+    case 'tool_use':
+      return toolUseView(ex, b, key, ctx, cc);
+    case 'tool_result':
+      return toolResultView(ex, b, key, ctx, cc);
+    case 'image':
+    case 'document':
+      return blk(t, [cc, h('span', { class: 'mono' }, mediaInfo(b))]);
+    case 'unknown':
+      return blk('value', cc, jsonView(b.value !== undefined ? b.value : b, key));
+    default:
+      return blk(t, cc, jsonView(b, key));
+  }
+}
+function toolUseView(ex, b, key, ctx, cc) {
+  const e = state.tools[b.id];
+  return blk('tool_use', [h('b', { class: 'mono' }, b.name || '?'), h('code', { class: 'muted' }, b.id || ''), statusChip(e), cc,
+    e && e.result_exchange != null ? link(`result in request #${e.result_exchange} →`, msgHash(e.result_exchange, e.result_message), 'lnk') : null],
+  b._partial_json != null ? h('div', { class: 'pre partial' }, 'assembling input… ' + b._partial_json) : jsonView(b.input == null ? {} : b.input, key + ':in'));
+}
+function resultContent(c, key, defOpen) {
+  if (c == null || (Array.isArray(c) && !c.length) || c === '') return h('div', { class: 'muted' }, '(empty)');
+  if (typeof c === 'string') return textOrJson(c, key, defOpen);
+  if (Array.isArray(c)) {
+    return c.map((x, i) => {
+      if (x && x.type === 'text') return textOrJson(x.text, key + ':' + i, defOpen);
+      if (x && (x.type === 'image' || x.type === 'document')) return h('div', null, badge(x.type), ' ', h('span', { class: 'mono' }, mediaInfo(x)));
+      return jsonView(x, key + ':' + i);
+    });
+  }
+  return jsonView(c, key);
+}
+function toolResultView(ex, b, key, ctx, cc) {
+  if (ctx.pairs) return pairView(b.tool_use_id, key, { result: b });
+  const e = state.tools[b.tool_use_id];
+  return blk('tool_result', [h('code', { class: 'muted' }, b.tool_use_id || ''),
+    b.is_error ? h('span', { class: 'flag err' }, 'is_error') : null,
+    h('span', { class: 'muted small' }, fmtN(contentSize(b.content)) + ' chars'), cc,
+    e && e.call_exchange != null ? link(`← call in reply #${e.call_exchange}`, `#/exchange/${e.call_exchange}/reply`, 'lnk') : null],
+  resultContent(b.content, key + ':c', ctx.textOpen));
+}
+// A tool call beside its result. `from` may carry the block we are rendering
+// (`call` in a reply, `result` in a request) for when the index doesn't have it.
+function pairView(tid, key, from) {
+  const e = state.tools[tid] || {};
+  const call = from.call || {};
+  const name = e.name || call.name || '?';
+  const callEx = e.call_exchange != null ? e.call_exchange : from.callExchange, resEx = e.result_exchange != null ? e.result_exchange : null;
+  const res = e.status === 'paired' ? { content: e.result, is_error: e.is_error } : from.result;
+  const status = e.status || (from.result ? 'paired' : 'pending');
+  const flow = h('div', { class: 'pair-flow' },
+    callEx != null ? link(`reply #${callEx}`, `#/exchange/${callEx}/reply`) : h('span', null, 'call from before this session'),
+    ' → ',
+    resEx != null ? link(`request #${resEx}`, msgHash(resEx, e.result_message)) : h('span', null, status === 'no_result' ? 'no result' : 'waiting for next request'),
+    statusChip({ status }),
+    e.wait_ms != null ? h('span', { class: 'muted' }, `result after ${fmtMs(e.wait_ms)}`) : null);
+  const partial = call.partial != null ? call.partial : null;
+  const input = e.input !== undefined && e.input !== null ? e.input : call.input;
+  const left = h('div', { class: 'pair-call' },
+    h('div', { class: 'pair-label' }, badge('tool_use'), h('b', { class: 'mono' }, name), h('code', { class: 'muted' }, tid || '')),
+    partial != null ? h('div', { class: 'pre partial' }, 'assembling input… ' + partial) : jsonView(input == null ? {} : input, key + ':in'));
+  let right;
+  if (res) {
+    right = h('div', { class: 'pair-result' + (res.is_error ? ' err' : '') },
+      h('div', { class: 'pair-label' }, badge('tool_result'),
+        res.is_error ? h('span', { class: 'flag err' }, 'is_error') : null,
+        h('span', { class: 'muted' }, fmtN(contentSize(res.content)) + ' chars'),
+        resEx != null ? link('open', msgHash(resEx, e.result_message), 'lnk') : null),
+      resultContent(res.content, key + ':res'));
+  } else if (status === 'no_result') {
+    right = h('div', { class: 'pair-result no_result' }, 'no result — the conversation moved on without one');
+  } else {
+    right = h('div', { class: 'pair-result pending' }, h('span', { class: 'spin' }), ' pending — the result arrives with the next request');
+  }
+  return h('div', { class: 'pair' }, flow, h('div', { class: 'pair-cols' }, left, right));
+}
+function msgCard(ex, m, ctx) {
+  ctx = ctx || {};
+  const key = `x${ex.id}:m${m.index}`;
+  const cls = m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'other';
+  const types = {};
+  for (const b of m.content) { const t = (b && b.type) || '?'; types[t] = (types[t] || 0) + 1; }
+  const hasCache = m.content.some((b) => b && b.cache_control);
+  return h('div', { class: 'msg ' + cls },
+    h('div', { class: 'mh' },
+      h('span', { class: 'role' }, `${m.role} #${m.index}`),
+      Object.keys(types).map((t) => h('span', { class: 'muted small' }, types[t] > 1 ? `${types[t]}× ${t}` : t)),
+      hasCache ? h('span', { class: 'flag cache' }, '⚑ cache_control') : null,
+      link('open ↗', `#/exchange/${ex.id}/message/${m.index}`, 'open')),
+    h('div', { class: 'mb' }, m.content.map((b, bi) => blockView(ex, b, `${key}:b${bi}`, ctx))));
+}
+
+// ================================================================== rendering
+let rafPending = false;
+function schedule() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; renderAll(); });
+}
+function guard(where, fn) {
+  try { fn(); }
+  catch (e) {
+    console.error(e);
+    const el = $(where);
+    if (el) el.replaceChildren(h('div', { class: 'render-error' }, 'Could not render: ' + e.message));
+  }
+}
+// The list and summary redraw at most 5 times a second unless rows come or go.
+let listKey = '', listAt = 0, listTimer = null;
+function renderListAndSummary() {
+  const r = state.route;
+  const key = `${state.ex.size}|${state.filter}|${state.hideChecks}|${r.view}:${r.id}|${state.paused}`;
+  const now = performance.now();
+  if (key === listKey && now - listAt < 200) {
+    if (!listTimer) listTimer = setTimeout(() => { listTimer = null; schedule(); }, 210);
+    return;
+  }
+  listKey = key; listAt = now;
+  guard('#summary', renderSummary);
+  guard('#list', renderList);
+}
+function renderAll() {
+  renderListAndSummary();
+  guard('#dbody', renderDetail);
+  guard('#mcontent', renderModal);
+}
+function renderConn() {
+  const c = $('#conn');
+  c.className = 'conn ' + (state.live ? 'live' : 'down');
+  c.textContent = state.live ? 'live' : 'reconnecting…';
+}
+function renderPause() {
+  $('#pause').textContent = state.paused ? 'Resume' : 'Pause';
+  $('#pause').classList.toggle('on', state.paused);
+  $('#paused-n').textContent = state.paused ? `paused · ${state.pending.length} new events waiting` : '';
+}
+function exchangesDesc() { return [...state.ex.values()].reverse(); }
+function apiExchanges() { return [...state.ex.values()].filter((x) => !isCheck(x)); }
+
+const hayCache = new WeakMap();
+function matches(ex, q) {
+  if (ex.path.toLowerCase().includes(q) || modelOf(ex).toLowerCase().includes(q)) return true;
+  let hay = hayCache.get(ex);
+  if (!hay || hay.rev !== ex.rev) {
+    hay = { rev: ex.rev, text: (safeStringify(ex.request_body) + '\n' + safeStringify(ex.assembled)).toLowerCase() };
+    hayCache.set(ex, hay);
+  }
+  return hay.text.includes(q);
+}
+function visibleExchanges() {
+  const q = state.filter.trim().toLowerCase();
+  return exchangesDesc().filter((ex) => !(state.hideChecks && isCheck(ex)) && (!q || matches(ex, q)));
+}
+
+// ---- session summary
+function sessionStats() {
+  const s = { n: 0, prompt: 0, output: 0, cacheRead: 0, cacheWrite: 0, input: 0, cost: 0, unpriced: 0,
+    durSum: 0, durN: 0, first: null, last: null, errors: {} };
+  for (const ex of apiExchanges()) {
+    s.n++;
+    const t = tok(ex);
+    if (t) { s.prompt += t.prompt; s.output += t.output; s.cacheRead += t.cacheRead; s.cacheWrite += t.cacheWrite; s.input += t.input; }
+    if (ex.cost_usd != null) s.cost += ex.cost_usd; else if (t && ex.ended_at) s.unpriced++;
+    if (ex.timing.total_ms != null) { s.durSum += ex.timing.total_ms; s.durN++; }
+    const st = Date.parse(ex.started_at), en = ex.ended_at ? Date.parse(ex.ended_at) : Date.now();
+    if (s.first == null || st < s.first) s.first = st;
+    if (s.last == null || en > s.last) s.last = en;
+    if (isFailed(ex)) { const k = errorKey(ex); s.errors[k] = (s.errors[k] || 0) + 1; }
+  }
+  return s;
+}
+function statBox(label, value, href, cls, title) {
+  return h('span', { class: 'stat ' + (cls || ''), title: title || 'Show the exchanges behind this number', onclick: () => go(href) },
+    h('span', { class: 'l' }, label), h('span', { class: 'v' }, value));
+}
+function renderSummary() {
+  const s = sessionStats();
+  const errs = Object.keys(s.errors).sort();
+  const el = $('#summary');
+  el.replaceChildren();
+  addKids(el, [
+    statBox('requests', fmtInt(s.n), '#/stats/requests'),
+    statBox('prompt', fmtN(s.prompt), '#/stats/prompt', '', 'prompt = input + cache read + cache write, summed over requests'),
+    statBox('output', fmtN(s.output), '#/stats/output'),
+    statBox('cache read', fmtN(s.cacheRead), '#/stats/cacheRead'),
+    statBox('cache write', fmtN(s.cacheWrite), '#/stats/cacheWrite'),
+    statBox('cache hit', fmtPct(s.prompt ? s.cacheRead / s.prompt : null), '#/stats/hit', '', 'cache read ÷ prompt over the session'),
+    statBox('cost', fmtUsd(s.cost) + (s.unpriced ? ` +${s.unpriced} unpriced` : ''), '#/stats/cost'),
+    statBox('wall clock', s.first != null ? fmtMs(s.last - s.first) : '—', '#/stats/requests', '', 'first request start to last reply end'),
+    statBox('avg latency', s.durN ? fmtMs(s.durSum / s.durN) : '—', '#/stats/duration'),
+    errs.length
+      ? errs.map((k) => statBox('errors', `${k} × ${s.errors[k]}`, '#/errors/' + k, 'err'))
+      : statBox('errors', '0', '#/stats/requests'),
+    h('span', { class: 'stat', onclick: () => go('#/tools'), title: 'Tool usage' }, h('span', { class: 'l' }, 'tool calls'), h('span', { class: 'v' }, fmtInt(Object.keys(state.tools).length)))]);
+}
+
+// ---- list
+function rowEl(ex, selId) {
+  const sel = ex.id === selId ? ' sel' : '';
+  const open = () => go(`#/exchange/${ex.id}`);
+  const st = ex.status != null ? h('span', { class: 'st ' + (ex.status >= 400 ? 'bad' : 'ok') }, ex.status) : null;
+  if (isCheck(ex)) {
+    return h('div', { class: 'row check' + sel, onclick: open, dataset: { id: ex.id } },
+      h('span', { class: 'id' }, '#' + ex.id), h('span', null, fmtTime(ex.started_at)),
+      h('span', { class: 'mono' }, `${ex.method} ${ex.path}`), st, ex.error ? h('span', { class: 'reason' }, ex.error) : null,
+      h('span', { class: 'dur' }, isStreaming(ex) ? h('span', { class: 'spin' }) : fmtMs(durationMs(ex))));
+  }
+  const t = tok(ex);
+  const reason = errorReason(ex);
+  const path = ex.path.split('?')[0];
+  const labels = [
+    ex.retry_of != null ? link(`retry of #${ex.retry_of}`, `#/exchange/${ex.retry_of}`, 'lnk') : null,
+    ex.retried_by != null ? link(`retried by #${ex.retried_by}`, `#/exchange/${ex.retried_by}`, 'lnk') : null,
+  ];
+  let l2;
+  if (reason) {
+    l2 = [h('span', { class: 'reason', title: reason }, reason), labels];
+  } else {
+    l2 = [
+      h('span', null, 'prompt ', h('b', null, t ? fmtN(t.prompt) : '…')),
+      h('span', null, 'out ', h('b', null, t ? fmtN(t.output) : '…')),
+      h('span', null, 'cache ', t ? fmtPct(t.hit) : '…'),
+      ex.assembled.stop_reason ? h('span', null, ex.assembled.stop_reason) : null,
+      labels,
+    ];
+  }
+  return h('div', { class: 'row' + sel, onclick: open, dataset: { id: ex.id } },
+    h('div', { class: 'l1' },
+      h('span', { class: 'id' }, '#' + ex.id), h('span', { class: 'muted' }, fmtTime(ex.started_at)),
+      h('span', { class: 'model' }, shortModel(modelOf(ex)) || ex.method),
+      path !== '/v1/messages' ? h('span', { class: 'mono muted small' }, path) : null,
+      st,
+      h('span', { class: 'dur' }, fmtMs(durationMs(ex))),
+      isStreaming(ex) ? h('span', { class: 'spin', title: 'streaming' }) : null),
+    h('div', { class: 'l2' }, l2));
+}
+function renderList() {
+  const r = state.route;
+  const selId = r.view === 'exchange' ? r.id : null;
+  const rows = visibleExchanges();
+  $('#list').replaceChildren(...rows.map((ex) => rowEl(ex, selId)));
+  const hidden = state.hideChecks ? apiCount(true) : 0;
+  $('#listcount').textContent = `${rows.length} shown` + (hidden ? ` · ${hidden} checks hidden` : '');
+  if (!rows.length) $('#list').append(h('div', { class: 'empty' }, state.ex.size ? 'Nothing matches.' : 'Waiting for traffic…  Run:  ANTHROPIC_BASE_URL=http://localhost:8041 claude'));
+}
+function apiCount(checks) { let n = 0; for (const ex of state.ex.values()) if (isCheck(ex) === checks) n++; return n; }
+
+// ---- detail pane
+let detailKey = null, tabSig = null, lastTabRender = 0, tabTimer = null;
+function renderDetail() {
+  const r = state.route;
+  const head = $('#dhead'), body = $('#dbody');
+  let key, sig, build, buildHead;
+  if (r.view === 'exchange') {
+    const ex = state.ex.get(r.id);
+    if (!ex) {
+      key = 'missing' + r.id; sig = String(state.rev);
+      buildHead = () => [];
+      build = () => h('div', { class: 'empty' }, `Exchange #${r.id} is not in the buffer.`);
+    } else {
+      key = `ex${ex.id}:${state.tab}`;
+      const t = state.tab;
+      sig = t === 'request' ? `${state.toolsRev}`
+        : t === 'reply' ? `${ex.rev}:${state.toolsRev}`
+        : t === 'diff' ? `${state.toolsRev}:${state.ex.size}`
+        : `${ex.rev}`;
+      buildHead = () => detailHead(ex);
+      build = () => ({ request: tabRequest, reply: tabReply, diff: tabDiff, raw: tabRaw }[t] || tabRequest)(ex);
+    }
+  } else if (r.view === 'tools') {
+    key = 'tools:' + (r.name || ''); sig = `${state.toolsRev}`;
+    buildHead = () => h('div', { class: 'dtitle', style: 'padding-bottom:8px' }, h('span', { class: 'big' }, 'Tools'), h('span', { class: 'muted' }, 'every tool call beside its result, newest first'));
+    build = () => viewTools(r.name);
+  } else if (r.view === 'stats') {
+    key = 'stats:' + r.metric + ':' + (r.status || ''); sig = `${state.rev}`;
+    buildHead = () => h('div', { class: 'dtitle', style: 'padding-bottom:8px' }, h('span', { class: 'big' }, statTitle(r)));
+    build = () => viewStats(r);
+  } else {
+    key = 'empty'; sig = String(state.ex.size);
+    buildHead = () => [];
+    build = () => h('div', { class: 'empty' }, 'Select an exchange on the left.');
+  }
+  head.replaceChildren();
+  addKids(head, [buildHead()]);
+  const changed = key !== detailKey;
+  if (!changed && sig === tabSig) return;
+  // Re-render the open tab at most ~8 times a second while a reply streams.
+  const now = performance.now();
+  if (!changed && now - lastTabRender < 120) {
+    if (!tabTimer) tabTimer = setTimeout(() => { tabTimer = null; schedule(); }, 130);
+    return;
+  }
+  const scroll = changed ? 0 : body.scrollTop;
+  const m = mount(() => build());
+  body.replaceChildren(m);
+  body.scrollTop = scroll;
+  detailKey = key; tabSig = sig; lastTabRender = now;
+}
+function detailHead(ex) {
+  const t = tok(ex), tm = ex.timing || {};
+  const title = h('div', { class: 'dtitle' },
+    h('span', { class: 'big' }, `#${ex.id}`),
+    h('span', { class: 'mono' }, `${ex.method} ${ex.path}`),
+    ex.status != null ? h('span', { class: 'st ' + (ex.status >= 400 ? 'bad' : 'ok') }, `${ex.status} ${ex.reason || ''}`) : null,
+    h('span', null, modelOf(ex)),
+    h('span', { class: 'muted' }, fmtTime(ex.started_at)),
+    isStreaming(ex) ? [h('span', { class: 'spin' }), h('span', { class: 'muted' }, 'streaming')] : null,
+    ex.retry_of != null ? link(`retry of #${ex.retry_of}`, `#/exchange/${ex.retry_of}`) : null,
+    ex.retried_by != null ? link(`retried by #${ex.retried_by}`, `#/exchange/${ex.retried_by}`) : null);
+  const req = `#/exchange/${ex.id}/request`, rep = `#/exchange/${ex.id}/message/reply`, repTab = `#/exchange/${ex.id}/reply`;
+  const strip = isCheck(ex) ? null : h('div', { class: 'strip' },
+    statBox('input', t ? fmtN(t.input) : '—', req, '', 'usage.input_tokens (uncached part of the prompt)'),
+    statBox('cache read', t ? fmtN(t.cacheRead) : '—', req),
+    statBox('cache write', t ? fmtN(t.cacheWrite) : '—', req),
+    statBox('prompt', t ? fmtN(t.prompt) : '—', req, '', 'input + cache read + cache write'),
+    statBox('output', t ? fmtN(t.output) : '—', rep),
+    statBox('cache hit', t ? fmtPct(t.hit) : '—', req),
+    statBox('cost', ex.cost_usd != null ? fmtUsd(ex.cost_usd) : '—', repTab, '', ex.cost_usd == null && t ? 'model not in pricing.json' : 'from usage × pricing.json'),
+    statBox('total', fmtMs(tm.total_ms), repTab),
+    statBox('ttfb', fmtMs(tm.ttfb_ms), repTab, '', 'time to first byte'),
+    statBox('ttft', fmtMs(tm.ttft_ms), repTab, '', 'time to first token'),
+    statBox('tok/s', tokPerSec(ex) != null ? tokPerSec(ex).toFixed(0) : '—', repTab, '', 'output tokens per second while streaming (whole request if the reply came in one burst)'));
+  const tabs = h('div', { class: 'tabs' },
+    [['request', 'Request'], ['reply', 'Reply'], ['diff', 'Diff'], ['raw', 'Raw']].map(([id, label], i) =>
+      h('button', { class: (state.tab === id ? 'on ' : '') + (id === 'reply' ? 'reply' : ''), title: `${label} (${i + 1})`,
+        onclick: () => go(`#/exchange/${ex.id}/${id}`) }, label)),
+    h('span', { class: 'keys muted small' }, '1–4 tabs · t tools · / filter · p pause'));
+  return [title, strip, tabs];
+}
+
+// ---- Request tab
+function tabRequest(ex) {
+  const n = normalize(ex);
+  const wrap = h('div');
+  if (n.kind === 'other') {
+    wrap.append(h('div', { class: 'toolbar' }, h('span', { class: 'muted' }, ex.request_body == null
+      ? 'This request has no body (a connection check).' : 'This body is not a Messages request, so it is shown as is.')));
+    if (ex.request_body != null) {
+      wrap.append(typeof ex.request_body === 'string' ? longText(ex.request_body, `x${ex.id}:rawbody`) : jsonView(ex.request_body, `x${ex.id}:body`));
+    }
+    return wrap;
+  }
+  const msgs = n.messages, prior = msgs.slice(0, -1), last = msgs[msgs.length - 1];
+  const sysChars = textLen(n.system);
+  const jump = (id) => () => { const el = document.getElementById(id); if (el) el.scrollIntoView({ block: 'start' }); };
+  wrap.append(h('div', { class: 'toolbar' },
+    h('div', { class: 'index' },
+      h('button', { style: '--accent: var(--c-sys)', onclick: jump('p-sys') }, 'System'),
+      h('button', { style: '--accent: var(--c-tools)', onclick: jump('p-tools') }, `Tools (${n.tools.length})`),
+      h('button', { style: '--accent: var(--c-conv)', onclick: jump('p-conv') }, `Conversation (${prior.length})`),
+      h('button', { style: '--accent: var(--c-new)', onclick: jump('p-new') }, 'New message'),
+      h('button', { style: '--accent: var(--c-params)', onclick: jump('p-params') }, 'Parameters')),
+    expandBar(() => wrap.parentNode)));
+
+  wrap.append(panel('p-sys', 'p-sys', 'System instructions',
+    `· ${n.system.length} block${n.system.length === 1 ? '' : 's'} · ${fmtN(sysChars)} chars · ~${fmtN(Math.round(sysChars / 4))} tokens`,
+    () => n.system.length ? h('div', null, n.system.map((b, i) => h('div', { class: 'sysblock' },
+      h('div', { class: 'lab' }, `block ${i + 1}`, b && typeof b.text === 'string' ? `· ${fmtN(b.text.length)} chars` : `· ${(b && b.type) || ''}`, cacheFlag(b)),
+      b && typeof b.text === 'string' ? longText(b.text, `x${ex.id}:sys:${i}`, false, 'prose') : jsonView(b, `x${ex.id}:sys:${i}`))))
+      : h('div', { class: 'muted' }, '(no system prompt)')));
+
+  wrap.append(panel('p-tools', 'p-tools', 'Tools', `· ${n.tools.length}`,
+    () => n.tools.length ? h('div', null, n.tools.map((t, i) => {
+      const k = `x${ex.id}:tool:${i}`;
+      const schema = t.input_schema !== undefined ? t.input_schema : null;
+      return h('div', { class: 'tooldef' },
+        h('div', { class: 'lab' }, h('span', { class: 'tn' }, t.name || '(unnamed)'),
+          t.type && t.type !== 'custom' && t.type !== 'function' ? h('span', { class: 'badge' }, t.type) : null,
+          t.description ? h('span', null, `${fmtN(String(t.description).length)} chars`) : null, cacheFlag(t.raw || t)),
+        t.description ? longText(t.description, k + ':d', false, 'prose') : null,
+        schema != null ? disclose(k + ':schema', 'input schema', false, () => jsonView(schema, k + ':s'))
+          : disclose(k + ':def', 'definition', false, () => jsonView(t.raw || t, k + ':s')));
+    })) : h('div', { class: 'muted' }, '(no tools)')));
+
+  wrap.append(panel('p-conv', 'p-conv', 'Conversation so far', `· ${prior.length} message${prior.length === 1 ? '' : 's'}`,
+    () => prior.length ? h('div', null, prior.map((m) => msgCard(ex, m))) : h('div', { class: 'muted' }, '(nothing before the new message)')));
+
+  wrap.append(panel('p-new', 'p-new', 'New message', last ? `· ${last.role} #${last.index}` : null,
+    () => last ? msgCard(ex, last, { pairs: true, textOpen: true }) : h('div', { class: 'muted' }, '(no messages)')));
+
+  const pk = Object.keys(n.params);
+  wrap.append(panel('p-params', 'p-params', 'Other parameters', `· ${pk.length}`,
+    () => h('table', { class: 'kv' }, pk.map((k) => {
+      const v = n.params[k];
+      return h('tr', null, h('th', null, k),
+        h('td', null, v !== null && typeof v === 'object' ? jsonView(v, `x${ex.id}:param:${k}`) : h('span', { class: 'mono' }, JSON.stringify(v))));
+    }))));
+  return wrap;
+}
+
+// ---- Reply tab
+function errorBox(ex) {
+  const info = ex.error_info;
+  const failedStatus = ex.status != null && ex.status >= 400;
+  if (!ex.error && !info && !failedStatus) return null;
+  const box = h('div', { class: 'errbox' });
+  if (ex.error) box.append(h('h3', null, 'Proxy error'), h('div', { class: 'mono' }, ex.error));
+  if (info || failedStatus) {
+    box.append(h('h3', null, `${ex.status != null ? ex.status : 'stream error'} ${(info && info.type) || ex.reason || ''}`));
+    if (info && info.message) box.append(h('div', { class: 'prose' }, info.message));
+    const ra = (info && info.retry_after) || hdr(ex.response_headers, 'retry-after');
+    if (ra) box.append(h('div', null, 'retry-after: ', h('b', null, String(ra)), /^\d+(\.\d+)?$/.test(String(ra)) ? ' s' : ''));
+    const rl = (info && info.ratelimit) || {};
+    const keys = Object.keys(rl);
+    if (keys.length) {
+      box.append(h('table', { class: 'kv', style: 'margin-top:6px' },
+        h('tr', null, h('th', null, 'rate-limit header'), h('th', null, 'value')),
+        keys.sort().map((k) => h('tr', null, h('td', { class: 'mono' }, k), h('td', { class: 'mono' }, rl[k])))));
+    }
+    if (!info && isStreaming(ex)) box.append(h('div', { class: 'muted' }, 'waiting for the error body…'));
+  }
+  if (ex.retried_by != null) box.append(h('div', null, 'Retried by ', link(`#${ex.retried_by}`, `#/exchange/${ex.retried_by}`)));
+  return box;
+}
+function tabReply(ex) {
+  const a = ex.assembled || { content: [] };
+  const content = a.content || [];
+  const wrap = h('div');
+  wrap.append(h('div', { class: 'toolbar' },
+    h('span', null, 'model ', h('b', null, a.model || modelOf(ex) || '—')),
+    h('span', null, 'stop_reason ', h('b', null, a.stop_reason || (isStreaming(ex) ? '…' : '—'))),
+    isStreaming(ex) ? [h('span', { class: 'spin' }), h('span', { class: 'muted' }, 'streaming')] : null,
+    link('open as message ↗', `#/exchange/${ex.id}/message/reply`),
+    expandBar(() => wrap.parentNode)));
+  const eb = errorBox(ex);
+  if (eb) wrap.append(eb);
+  if (a.error && !ex.error_info) wrap.append(h('div', { class: 'errbox' }, h('h3', null, 'Error event in the stream'), jsonView(a.error, `x${ex.id}:serr`)));
+
+  wrap.append(panel('p-reply', 'p-reply-body', 'Reply', `· ${content.length} block${content.length === 1 ? '' : 's'}`, () => {
+    if (!content.length) {
+      if (isCheck(ex)) return h('div', { class: 'muted' }, 'A connection check has no reply body.');
+      if (ex.response_body != null) {
+        return typeof ex.response_body === 'string' ? longText(ex.response_body, `x${ex.id}:rbody`) : jsonView(ex.response_body, `x${ex.id}:rbody`);
+      }
+      return h('div', { class: 'muted' }, isStreaming(ex) ? 'waiting for the first token…' : '(no content)');
+    }
+    return h('div', null, content.map((b, i) => {
+      const k = `x${ex.id}:r:b${i}`;
+      if (b && b.type === 'tool_use') return pairView(b.id, k, { callExchange: ex.id, call: { name: b.name, input: b.input, partial: b._partial_json } });
+      return blockView(ex, b, k, { textOpen: true });
+    }));
+  }));
+
+  const t = tok(ex), tm = ex.timing || {};
+  const cell = (l, v, title) => h('span', { class: 'stat', title }, h('span', { class: 'l' }, l), h('span', { class: 'v' }, v));
+  wrap.append(panel('p-params', 'p-usage', 'Usage', null, () => h('div', { class: 'usage' },
+    cell('input', t ? fmtInt(t.input) : '—', 'usage.input_tokens'),
+    cell('output', t ? fmtInt(t.output) : '—', 'usage.output_tokens'),
+    cell('cache read', t ? fmtInt(t.cacheRead) : '—', 'usage.cache_read_input_tokens'),
+    cell('cache write', t ? fmtInt(t.cacheWrite) : '—', 'usage.cache_creation_input_tokens'),
+    cell('prompt', t ? fmtInt(t.prompt) : '—', 'input + cache read + cache write'),
+    cell('cache hit', t ? fmtPct(t.hit) : '—', 'cache read ÷ prompt'),
+    cell('cost', fmtUsd(ex.cost_usd), ex.cost_usd == null ? 'model not in pricing.json' : ''),
+    cell('total', fmtMs(tm.total_ms)), cell('ttfb', fmtMs(tm.ttfb_ms)), cell('ttft', fmtMs(tm.ttft_ms)),
+    cell('tok/s', tokPerSec(ex) != null ? tokPerSec(ex).toFixed(1) : '—'))));
+  return wrap;
+}
+
+// ---- Diff tab
+function tabDiff(ex) {
+  const n = normalize(ex);
+  const wrap = h('div');
+  if (!n.messages.length) {
+    wrap.append(h('div', { class: 'empty' }, 'This request has no messages to compare.'));
+    return wrap;
+  }
+  const found = findPrevious(ex);
+  const total = n.messages.length;
+  const k = found ? found.k : 0;
+  const me = canon(ex);
+  const resentChars = me.msgs.slice(0, k).reduce((s, x) => s + x.length, 0);
+  wrap.append(h('div', { class: 'toolbar' },
+    found
+      ? h('span', null, 'Compared with ', link(`request #${found.prev.id}`, `#/exchange/${found.prev.id}/request`),
+        ', the previous request of this conversation.', found.sameSystem ? '' : ' (Its system prompt differs.)')
+      : h('span', null, 'No earlier request of this conversation is in the buffer, so every message counts as new.'),
+    expandBar(() => wrap.parentNode)));
+  const bar = h('div', { class: 'diffbar', title: 'one square per message: grey = resent unchanged, orange = new' });
+  for (let i = 0; i < total; i++) bar.append(h('span', { class: i >= k ? 'new' : '', title: `${n.messages[i].role} #${i}` }));
+  const pc = found ? canon(found.prev) : null;
+  wrap.append(h('div', { class: 'panel p-params' }, h('div', { class: 'mount' },
+    h('div', null, h('b', null, `${total} messages sent`), ` = ${k} resent unchanged (${fmtN(resentChars)} chars) + `,
+      h('b', { style: 'color:var(--c-new)' }, `${total - k} new`)),
+    bar,
+    found ? h('div', { class: 'muted small' },
+      `system prompt: ${pc.system === me.system ? 'same' : 'changed'} · tools: ${pc.tools === me.tools ? 'same' : 'changed'} · ` +
+      'The harness resends the whole history every turn; only the orange part is new.') : null)));
+  const fresh = n.messages.slice(k);
+  wrap.append(panel('p-new', 'p-diff-new', 'New since the previous request', `· ${fresh.length} message${fresh.length === 1 ? '' : 's'}`,
+    () => fresh.length ? h('div', null, fresh.map((m) => msgCard(ex, m, { pairs: m.index === total - 1, textOpen: true })))
+      : h('div', { class: 'muted' }, '(no new messages: this is an exact resend)')));
+  return wrap;
+}
+
+// ---- Raw tab
+function headerTable(headers) {
+  const keys = Object.keys(headers || {});
+  if (!keys.length) return h('div', { class: 'muted' }, '(none)');
+  return h('table', { class: 'kv' }, keys.map((k) => h('tr', null, h('th', { class: 'mono' }, k), h('td', { class: 'mono', style: 'overflow-wrap:anywhere' }, String(headers[k])))));
+}
+function rawSse(ex) {
+  return ex.response_events.map((e) => `event: ${e.event}\ndata: ${typeof e.data === 'string' ? e.data : JSON.stringify(e.data)}\n`).join('\n');
+}
+function tabRaw(ex) {
+  const wrap = h('div');
+  wrap.append(h('div', { class: 'toolbar' }, h('span', { class: 'mono' }, `${ex.method} ${ex.path}`), expandBar(() => wrap.parentNode)));
+  wrap.append(panel('p-conv', 'p-raw-reqh', 'Request headers', null, () => h('div', null,
+    h('div', { class: 'toolbar' }, copyBtn(() => JSON.stringify(ex.request_headers, null, 2), 'copy headers'),
+      h('span', { class: 'muted small' }, 'authorization, x-api-key and cookie values are cut to 16 characters')),
+    headerTable(ex.request_headers))));
+  wrap.append(panel('p-conv', 'p-raw-reqb', 'Request body', ex.request_body == null ? '· none' : null, () => {
+    if (ex.request_body == null) return h('div', { class: 'muted' }, '(no body)');
+    if (typeof ex.request_body === 'string') return h('div', null, copyBtn(() => ex.request_body), longText(ex.request_body, `x${ex.id}:rawreq`));
+    return jsonView(ex.request_body, `x${ex.id}:rawreq`);
+  }));
+  wrap.append(panel('p-reply', 'p-raw-resh', 'Response headers', ex.status != null ? `· ${ex.status} ${ex.reason || ''}` : '· waiting', () => h('div', null,
+    h('div', { class: 'toolbar' }, copyBtn(() => JSON.stringify(ex.response_headers, null, 2), 'copy headers')),
+    headerTable(ex.response_headers))));
+  if (ex.response_events.length) {
+    wrap.append(panel('p-reply', 'p-raw-sse', 'Response stream (SSE)', `· ${ex.response_events.length} events`, () => {
+      const text = rawSse(ex);
+      return h('div', null, h('div', { class: 'toolbar' }, copyBtn(() => text, 'copy SSE lines')), longText(text, `x${ex.id}:sse`));
+    }));
+  } else {
+    wrap.append(panel('p-reply', 'p-raw-resb', 'Response body', null, () => {
+      const b = ex.response_body;
+      if (b == null) return h('div', { class: 'muted' }, isStreaming(ex) ? '(waiting)' : '(no body)');
+      if (typeof b === 'string') return h('div', null, copyBtn(() => b), longText(b, `x${ex.id}:rawres`));
+      return jsonView(b, `x${ex.id}:rawres`);
+    }));
+  }
+  return wrap;
+}
+
+// ---- Tools view
+function toolStats() {
+  const by = {};
+  for (const e of Object.values(state.tools)) {
+    const s = by[e.name || '?'] = by[e.name || '?'] || { calls: 0, errors: 0, sizeSum: 0, sizeN: 0, waitSum: 0, waitN: 0, pending: 0 };
+    s.calls++;
+    if (e.is_error) s.errors++;
+    if (e.result_size != null) { s.sizeSum += e.result_size; s.sizeN++; }
+    if (e.wait_ms != null) { s.waitSum += e.wait_ms; s.waitN++; }
+    if (e.status === 'pending') s.pending++;
+  }
+  return by;
+}
+function viewTools(name) {
+  const wrap = h('div');
+  const by = toolStats();
+  const names = Object.keys(by).sort((a, b) => by[b].calls - by[a].calls);
+  wrap.append(panel('p-tools', 'p-toolstats', 'Tool usage', `· ${names.length} tools · click a row to list its calls`, () => h('table', { class: 'kv' },
+    h('tr', null, h('th', null, 'tool'), h('th', { class: 'num' }, 'calls'), h('th', { class: 'num' }, 'errors'),
+      h('th', { class: 'num' }, 'pending'), h('th', { class: 'num' }, 'avg result size'), h('th', { class: 'num' }, 'avg call → result')),
+    names.map((n) => {
+      const s = by[n];
+      return h('tr', { class: 'click' + (n === name ? ' on' : ''), onclick: () => go(n === name ? '#/tools' : '#/tools/' + encodeURIComponent(n)) },
+        h('td', { class: 'mono' }, n), h('td', { class: 'num' }, s.calls), h('td', { class: 'num' }, s.errors || ''),
+        h('td', { class: 'num' }, s.pending || ''),
+        h('td', { class: 'num' }, s.sizeN ? fmtN(Math.round(s.sizeSum / s.sizeN)) + ' chars' : '—'),
+        h('td', { class: 'num' }, s.waitN ? fmtMs(s.waitSum / s.waitN) : '—'));
+    }))));
+  const entries = Object.values(state.tools).filter((e) => !name || e.name === name);
+  entries.sort((a, b) => ((b.call_exchange != null ? b.call_exchange : b.result_exchange || 0) - (a.call_exchange != null ? a.call_exchange : a.result_exchange || 0)));
+  const shown = entries.slice(0, 150);
+  wrap.append(panel('p-new', 'p-toolpairs', name ? `${name} calls` : 'All calls', `· ${entries.length}${entries.length > shown.length ? ` (newest ${shown.length} shown)` : ''}`,
+    () => shown.length ? h('div', null, shown.map((e) => pairView(e.id, 'tools:' + e.id, {}))) : h('div', { class: 'muted' }, 'No tool calls yet.')));
+  return wrap;
+}
+
+// ---- statistics drill-down
+const METRICS = {
+  requests: ['All requests', (ex) => ex.id, (ex) => '#' + ex.id],
+  prompt: ['Prompt tokens per request', (ex) => (tok(ex) || {}).prompt, (ex) => fmtInt((tok(ex) || {}).prompt)],
+  output: ['Output tokens per request', (ex) => (tok(ex) || {}).output, (ex) => fmtInt((tok(ex) || {}).output)],
+  cacheRead: ['Cache-read tokens per request', (ex) => (tok(ex) || {}).cacheRead, (ex) => fmtInt((tok(ex) || {}).cacheRead)],
+  cacheWrite: ['Cache-write tokens per request', (ex) => (tok(ex) || {}).cacheWrite, (ex) => fmtInt((tok(ex) || {}).cacheWrite)],
+  hit: ['Cache hit per request', (ex) => (tok(ex) || {}).hit, (ex) => fmtPct((tok(ex) || {}).hit)],
+  cost: ['Cost per request', (ex) => ex.cost_usd, (ex) => fmtUsd(ex.cost_usd)],
+  duration: ['Duration per request', (ex) => ex.timing.total_ms, (ex) => fmtMs(ex.timing.total_ms)],
+};
+function statTitle(r) { return r.metric === 'errors' ? `Errors: ${r.status}` : (METRICS[r.metric] || METRICS.requests)[0]; }
+function viewStats(r) {
+  let list = apiExchanges();
+  let metric = METRICS[r.metric] || METRICS.requests;
+  if (r.metric === 'errors') {
+    list = list.filter((ex) => isFailed(ex) && errorKey(ex) === r.status);
+    metric = ['', (ex) => ex.id, (ex) => errorReason(ex) || ''];
+  }
+  const val = metric[1];
+  list.sort((a, b) => (val(b) == null ? -Infinity : val(b)) - (val(a) == null ? -Infinity : val(a)) || b.id - a.id);
+  return h('div', null, h('table', { class: 'kv' },
+    h('tr', null, h('th', null, 'exchange'), h('th', null, 'time'), h('th', null, 'model'), h('th', { class: 'num' }, r.metric === 'errors' ? 'reason' : 'value'), h('th', null, 'open')),
+    list.map((ex) => h('tr', { class: 'click', onclick: () => go(`#/exchange/${ex.id}`) },
+      h('td', null, '#' + ex.id), h('td', null, fmtTime(ex.started_at)), h('td', null, shortModel(modelOf(ex))),
+      h('td', { class: 'num' }, metric[2](ex)),
+      h('td', null, link('request', `#/exchange/${ex.id}/request`), ' · ', link('reply', `#/exchange/${ex.id}/message/reply`))))),
+  list.length ? null : h('div', { class: 'empty' }, 'No exchanges.'));
+}
+
+// ---- message drill-down (modal)
+let modalSig = null;
+function replyMessage(ex) {
+  const content = (ex.assembled.content || []).map((b) => {
+    const c = Object.assign({}, b);
+    delete c._partial_json;
+    return c;
+  });
+  return { role: 'assistant', index: 'reply', content, raw: { role: 'assistant', content } };
+}
+function renderModal() {
+  const r = state.route;
+  const modal = $('#modal');
+  if (r.view !== 'exchange' || r.modal == null) {
+    if (!modal.hidden) modal.hidden = true;
+    modalSig = null;
+    return;
+  }
+  const ex = state.ex.get(r.id);
+  const isReply = r.modal === 'reply';
+  const sig = `${r.id}:${r.modal}:${ex ? 'y' : 'n'}:${ex && isReply ? ex.rev : ''}`;
+  modal.hidden = false;
+  if (sig === modalSig) return;
+  modalSig = sig;
+  const close = h('button', { onclick: closeModal }, '✕ close');
+  if (!ex) {
+    $('#mhead').replaceChildren(h('b', null, `Exchange #${r.id}`), h('span', { style: 'margin-left:auto' }), close);
+    $('#mcontent').replaceChildren(h('div', { class: 'empty' }, 'This exchange is not in the buffer.'));
+    return;
+  }
+  const n = normalize(ex);
+  const m = isReply ? replyMessage(ex) : n.messages[Number(r.modal)];
+  if (!m) {
+    $('#mhead').replaceChildren(h('b', null, `#${ex.id} message ${r.modal}`), h('span', { style: 'margin-left:auto' }), close);
+    $('#mcontent').replaceChildren(h('div', { class: 'empty' }, 'No such message.'));
+    return;
+  }
+  const where = isReply ? 'the reply (not part of messages yet)' : `position ${m.index} of ${n.messages.length} in messages (0-based)`;
+  const selfLink = location.href;
+  $('#mhead').replaceChildren(
+    h('b', null, `${m.role} ${isReply ? 'reply' : '#' + m.index}`),
+    h('span', { class: 'muted' }, `exchange #${ex.id} · ${where} · ${m.content.length} block${m.content.length === 1 ? '' : 's'}`),
+    h('span', { style: 'margin-left:auto' }),
+    copyBtn(() => selfLink, 'copy link'),
+    copyBtn(() => JSON.stringify(m.raw), 'copy raw JSON'),
+    close);
+  const key = `modal:x${ex.id}:${m.index}`;
+  $('#mcontent').replaceChildren(mount(() => h('div', null,
+    m.content.map((b, i) => {
+      const t = (b && b.type) || 'unknown';
+      const facts = [];
+      if (t === 'tool_use') facts.push(['id', b.id], ['name', b.name]);
+      if (t === 'tool_result') facts.push(['tool_use_id', b.tool_use_id], ['is_error', String(!!b.is_error)], ['size', fmtInt(contentSize(b.content)) + ' chars']);
+      if (t === 'text') facts.push(['length', fmtInt((b.text || '').length) + ' chars']);
+      if (t === 'thinking') facts.push(['length', fmtInt((b.thinking || '').length) + ' chars']);
+      if (t === 'image' || t === 'document') facts.push(['media', mediaInfo(b)]);
+      if (b && b.cache_control) facts.push(['cache_control', JSON.stringify(b.cache_control)]);
+      return h('div', { class: 'blockcard' },
+        h('div', { class: 'blk-head' }, h('b', null, `block ${i}`), badge(t)),
+        facts.length ? h('table', { class: 'kv', style: 'margin-bottom:6px' }, facts.map(([a, v]) => h('tr', null, h('th', null, a), h('td', { class: 'mono' }, v == null ? '—' : String(v))))) : null,
+        blockView(ex, b, `${key}:b${i}`, { textOpen: true, modal: true }));
+    }),
+    h('h4', null, 'Raw JSON'),
+    jsonView(m.raw, key + ':raw', { openDepth: 3, copy: JSON.stringify(m.raw) }))));
+}
+function closeModal() {
+  const r = state.route;
+  go(`#/exchange/${r.id}/${state.tab}`);
+}
+
+// ================================================================== routing
+function go(hash) { if (location.hash === hash) onRoute(); else location.hash = hash; }
+function onRoute() {
+  const p = location.hash.replace(/^#\/?/, '').split('/').map((x) => { try { return decodeURIComponent(x); } catch (e) { return x; } });
+  let r = { view: 'empty' };
+  if (p[0] === 'exchange' && p[1] && !isNaN(+p[1])) {
+    r = { view: 'exchange', id: +p[1] };
+    if (['request', 'reply', 'diff', 'raw'].includes(p[2])) state.tab = p[2];
+    if (p[2] === 'message' && p[3] != null && p[3] !== '') {
+      r.modal = p[3];
+      state.tab = p[3] === 'reply' ? 'reply' : 'request';
+    }
+  } else if (p[0] === 'tools') {
+    r = { view: 'tools', name: p[1] || null };
+  } else if (p[0] === 'stats') {
+    r = { view: 'stats', metric: p[1] || 'requests' };
+  } else if (p[0] === 'errors') {
+    r = { view: 'stats', metric: 'errors', status: p[1] || '' };
+  }
+  state.route = r;
+  $('#toolsbtn').classList.toggle('on', r.view === 'tools');
+  renderAll();
+  if (r.view === 'exchange') {
+    const row = document.querySelector(`#list .row[data-id="${r.id}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest' });
+  }
+}
+function moveSelection(d) {
+  const rows = visibleExchanges();
+  if (!rows.length) return;
+  const cur = state.route.view === 'exchange' ? rows.findIndex((x) => x.id === state.route.id) : -1;
+  const next = cur === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, cur + d));
+  go(`#/exchange/${rows[next].id}`);
+}
+
+// ================================================================ controls
+function setTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  try { if (t) localStorage.setItem('theme', t); else localStorage.removeItem('theme'); } catch (e) { /* ignore */ }
+}
+function init() {
+  let saved = null;
+  try { saved = localStorage.getItem('theme'); } catch (e) { /* ignore */ }
+  if (saved) setTheme(saved);
+  $('#theme').addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme === 'dark' ||
+      (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    setTheme(dark ? 'light' : 'dark');
+  });
+  $('#banner-x').addEventListener('click', () => $('#banner').remove());
+  $('#pause').addEventListener('click', togglePause);
+  $('#clear').addEventListener('click', () => { fetch('/api/clear', { method: 'POST' }).catch((e) => console.warn(e)); });
+  $('#toolsbtn').addEventListener('click', () => go(state.route.view === 'tools' ? '#/' : '#/tools'));
+  let ft = null;
+  $('#filter').addEventListener('input', (e) => {
+    clearTimeout(ft);
+    ft = setTimeout(() => { state.filter = e.target.value; state.rev++; schedule(); }, 150);
+  });
+  $('#hidechecks').addEventListener('change', (e) => { state.hideChecks = e.target.checked; schedule(); });
+  $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches && e.target.matches('input, textarea')) { if (e.key === 'Escape') e.target.blur(); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const r = state.route;
+    if (e.key === 'Escape' && r.modal != null) { closeModal(); return; }
+    if (!$('#modal').hidden) return;
+    if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1); }
+    else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1); }
+    else if ('1234'.includes(e.key) && e.key.length === 1 && r.view === 'exchange') go(`#/exchange/${r.id}/${['request', 'reply', 'diff', 'raw'][+e.key - 1]}`);
+    else if (e.key === 't') go(r.view === 'tools' ? '#/' : '#/tools');
+    else if (e.key === '/') { e.preventDefault(); $('#filter').focus(); }
+    else if (e.key === 'p') togglePause();
+  });
+  window.addEventListener('hashchange', onRoute);
+  // Keep live durations ticking while something streams.
+  setInterval(() => { for (const ex of state.ex.values()) if (isStreaming(ex)) { guard('#list', renderList); guard('#summary', renderSummary); break; } }, 1000);
+  renderConn();
+  onRoute();
+  connect();
+}
+function togglePause() {
+  state.paused = !state.paused;
+  if (!state.paused) {
+    const q = state.pending;
+    state.pending = [];
+    for (const [name, d] of q) applyEvent(name, d);
+    schedule();
+  }
+  renderPause();
+}
+init();
+</script>
+</body>
+</html>
