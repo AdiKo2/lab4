@@ -1,0 +1,1200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Traffic</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f3; --surface: #ffffff; --surface2: #efefea; --line: #d9d9d2; --text: #1f2328; --muted: #646a72;
+  --system: #7a4fd0; --tools: #0f7f8c; --conv: #a8660a; --new: #1f8a4c; --reply: #c63d73; --params: #646a72;
+  --user-bg: #eef4fd; --assistant-bg: #fbf3ef; --red: #c92a2a; --red-bg: #fde8e8; --amber: #a86400; --ok: #1f8a4c;
+  --j-key: #7a2fb5; --j-str: #16763a; --j-num: #0b62c4; --j-bool: #b4490a; --j-null: #a01f6b;
+  --sel: #e3ecfb;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15171a; --surface: #1d2024; --surface2: #272b30; --line: #363b42; --text: #e4e6e9; --muted: #9aa1aa;
+  --system: #a98bf0; --tools: #3fbccb; --conv: #dd9b3e; --new: #4cc77f; --reply: #ee79a6; --params: #9aa1aa;
+  --user-bg: #1c2a3d; --assistant-bg: #33261f; --red: #ff7b7b; --red-bg: #431e1e; --amber: #e5a740; --ok: #4cc77f;
+  --j-key: #c79af0; --j-str: #79d597; --j-num: #79b8ff; --j-bool: #f0a264; --j-null: #f08cc4;
+  --sel: #24344c;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13.5px/1.45 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+button { font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 2px 9px; cursor: pointer; }
+button:hover { background: var(--surface2); }
+button:focus-visible, a:focus-visible, input:focus-visible, .row:focus-visible { outline: 2px solid var(--j-num); outline-offset: 1px; }
+a { color: var(--j-num); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--muted); }
+.gap { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+
+#top { display: flex; gap: 10px; align-items: center; padding: 7px 12px; background: var(--surface); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+#top strong { font-size: 14px; }
+#conn { padding: 1px 9px; border-radius: 10px; font-size: 12px; font-weight: 600; color: #fff; background: var(--amber); }
+#conn.live { background: var(--ok); }
+#filter { flex: 1; min-width: 180px; max-width: 420px; font: inherit; padding: 3px 8px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; }
+#pause.on { background: var(--amber); color: #fff; border-color: var(--amber); }
+#banner { padding: 3px 12px; font-size: 12px; background: var(--surface2); color: var(--muted); border-bottom: 1px solid var(--line); }
+#summary { display: flex; gap: 6px; padding: 6px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--surface); }
+.tile { text-align: left; padding: 3px 10px; min-width: 84px; }
+.tile b { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
+.tile span { font-size: 11px; color: var(--muted); }
+
+#main { flex: 1; display: grid; grid-template-columns: minmax(330px, 410px) 1fr; min-height: 0; }
+#list { overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); }
+.row { padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer; font-variant-numeric: tabular-nums; }
+.row:hover { background: var(--surface2); }
+.row.selected { background: var(--sel); box-shadow: inset 3px 0 0 var(--j-num); }
+.row .l1 { display: flex; gap: 6px; align-items: center; }
+.row .model { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .l2, .row .l3 { color: var(--muted); font-size: 12px; }
+.row .l2 b { color: var(--text); font-weight: 600; }
+.status { font-size: 11.5px; padding: 0 5px; border-radius: 3px; background: var(--surface2); }
+.status.bad { background: var(--red-bg); color: var(--red); font-weight: 600; }
+.spinner { width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--reply); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+
+#detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#strip { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+#strip:empty { display: none; }
+.stat { padding: 1px 7px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.stat i { font-style: normal; color: var(--muted); margin-right: 4px; }
+#tabs { display: flex; gap: 2px; padding: 6px 12px 0; background: var(--surface); border-bottom: 1px solid var(--line); align-items: flex-end; flex-wrap: wrap; }
+.tab { border: 1px solid transparent; border-bottom: 3px solid transparent; background: none; border-radius: 5px 5px 0 0; padding: 3px 13px 4px; }
+.tab.active { font-weight: 600; border-bottom-color: var(--j-num); }
+.tab[data-tab="reply"] { color: var(--reply); }
+.tab[data-tab="reply"].active { border-bottom-color: var(--reply); }
+#content { flex: 1; overflow-y: auto; padding: 0 12px 40px; min-height: 0; }
+.empty { color: var(--muted); padding: 30px 6px; }
+
+#index { position: sticky; top: 0; z-index: 4; background: var(--bg); display: flex; gap: 6px; padding: 6px 0; height: 36px; align-items: center; }
+#index button { font-size: 12px; border-left-width: 3px; }
+.panel { margin: 14px 0 22px; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 5px; }
+.panel > header { position: sticky; top: var(--stick, 0); z-index: 3; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 5px 10px; background: var(--surface); border-bottom: 1px solid var(--line); border-radius: 5px 5px 0 0; }
+.panel > header .name { color: var(--accent); font-weight: 700; }
+.panel > .body { padding: 9px 10px; }
+.panel-system { --accent: var(--system); } .panel-tools { --accent: var(--tools); }
+.panel-conv { --accent: var(--conv); } .panel-new { --accent: var(--new); }
+.panel-new > .body { background: color-mix(in srgb, var(--new) 7%, var(--surface)); }
+.panel-reply { --accent: var(--reply); } .panel-params { --accent: var(--params); }
+.small { font-size: 11.5px; padding: 0 7px; }
+
+.lt-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lt.closed .lt-body { max-height: 8.7em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 45%, transparent); mask-image: linear-gradient(#000 45%, transparent); }
+button.lt-toggle { display: inline-block; margin: 4px 0; font-size: 12px; color: var(--j-num); text-decoration: underline; }
+
+.card { border: 1px solid var(--line); border-radius: 5px; margin: 8px 0; }
+.card > .chead { display: flex; gap: 8px; align-items: center; padding: 3px 9px; font-weight: 600; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.card > .cbody { padding: 7px 9px; }
+.card.user { background: var(--user-bg); margin-right: 8%; }
+.card.assistant { background: var(--assistant-bg); margin-left: 8%; }
+.block { margin: 6px 0; padding: 5px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+.block.tool_use { border-left: 3px solid var(--j-num); }
+.block.tool_result { border-left: 3px solid var(--j-str); }
+.block.thinking { border-left: 3px dashed var(--muted); }
+.bhead { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-bottom: 3px; font-size: 12px; }
+.badge { font: 600 10.5px var(--mono); text-transform: none; padding: 0 5px; border-radius: 3px; color: #fff; background: var(--muted); }
+.badge.text { background: #5b6470; } .badge.tool_use { background: #1668c7; } .badge.tool_result { background: #16763a; }
+.badge.thinking { background: #7a4fd0; } .badge.cache { background: #a86400; } .badge.error { background: #c92a2a; }
+.badge.pending { background: #a86400; } .badge.paired { background: #16763a; } .badge.no_result { background: #6b7280; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: 5px; margin: 7px 0; background: var(--surface); }
+.pair > .side { padding: 6px 9px; min-width: 0; }
+.pair > .side + .side { border-left: 1px solid var(--line); }
+.pair > .side.iserr { background: var(--red-bg); }
+.pair .plabel { font-size: 11.5px; margin-bottom: 4px; }
+.pair .plabel:not(.gap) { display: block; }
+.jump { background: none; border: none; padding: 0; color: var(--j-num); text-decoration: underline; font-size: 11.5px; }
+
+.json { font: 12.5px/1.5 var(--mono); overflow-wrap: anywhere; position: relative; }
+.jwrap { position: relative; padding: 4px 6px; background: color-mix(in srgb, var(--surface2) 50%, transparent); border-radius: 4px; margin: 3px 0; }
+.jcopy { float: right; font-size: 11px; padding: 0 6px; margin-left: 6px; position: relative; z-index: 1; }
+.jn { display: block; }
+.jkids { display: block; margin-left: 2ch; }
+.jf { cursor: pointer; background: none; border: none; padding: 0; font: inherit; color: var(--muted); }
+.k { color: var(--j-key); } .s { color: var(--j-str); } .n { color: var(--j-num); } .b { color: var(--j-bool); } .u { color: var(--j-null); }
+.s > .lt-body { display: inline; }
+.fmt { font-size: 10.5px; padding: 0 5px; margin-left: 5px; }
+
+table.t { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+table.t th, table.t td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.t th { font-size: 11.5px; color: var(--muted); }
+table.t tr.click { cursor: pointer; }
+table.t tr.click:hover { background: var(--surface2); }
+.usage { display: flex; gap: 14px; flex-wrap: wrap; }
+.usage b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+.errbox { color: var(--red); background: var(--red-bg); padding: 5px 9px; border-radius: 4px; margin: 10px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  body { overflow: auto; } #main { display: block; } #list { max-height: 40vh; border-right: none; border-bottom: 1px solid var(--line); }
+  .pair { grid-template-columns: 1fr; } .pair > .side + .side { border-left: none; border-top: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<div id="top">
+  <strong>Agent Traffic</strong>
+  <span id="conn">reconnecting</span>
+  <button id="pause" title="Keyboard: p">Pause</button>
+  <button id="clear">Clear</button>
+  <input id="filter" type="search" placeholder="Filter by path, model or text ( / )" aria-label="Filter">
+  <span id="count" class="muted"></span>
+  <span class="grow"></span>
+  <button id="toolsbtn">Tools</button>
+  <button id="export">Export</button>
+  <button id="theme" title="Light or dark">Theme</button>
+</div>
+<div id="banner">Conversation contents are shown in full here and in exports. Be careful when sharing screenshots or exports.</div>
+<div id="summary"></div>
+<div id="main">
+  <div id="list" role="listbox" aria-label="Exchanges"></div>
+  <div id="detail">
+    <div id="strip"></div>
+    <div id="tabs"></div>
+    <div id="content"></div>
+  </div>
+</div>
+<script>
+"use strict";
+// Everything from the wire is shown through text nodes. This file never builds
+// HTML from strings, so markup in model output or tool results cannot run.
+
+const $ = id => document.getElementById(id);
+const exchanges = new Map();
+let tools = new Map();
+const openState = new Map();          // survives re-rendering and switching exchanges
+const rows = new Map();
+let route = {view: "none"};
+let selectedId = null;
+let paused = false, held = [];
+let filterText = "";
+const searchCache = new Map();
+let replyView = null;
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "data") Object.assign(el.dataset, v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  add(el, kids);
+  return el;
+}
+function add(el, kids) {
+  for (const kid of kids) {
+    if (kid == null || kid === false) continue;
+    if (Array.isArray(kid)) add(el, kid);
+    else el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  }
+}
+
+// ---------------------------------------------------------------- formatting
+const num = n => n == null ? "—" : Number(n).toLocaleString("en-US");
+function kilo(n) {
+  if (n == null) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1e6) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + "k";
+  return (n / 1e6).toFixed(2) + "M";
+}
+const sizeText = n => n < 1000 ? n + " chars" : (n / 1000).toFixed(1) + "k chars";
+const ms = v => v == null ? "—" : v < 1000 ? Math.round(v) + " ms" : (v / 1000).toFixed(v < 60000 ? 2 : 0) + " s";
+function money(v) {
+  if (v == null) return "—";
+  return "$" + (v >= 1 ? v.toFixed(2) : v >= 0.001 ? v.toFixed(4) : v.toFixed(6));
+}
+const pct = v => v == null ? "—" : Math.round(v * 100) + "%";
+function clock(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "—" : d.toLocaleTimeString("en-GB", {hour12: false});
+}
+function usageOf(ex) {
+  const u = ex.assembled && ex.assembled.usage;
+  if (!u) return null;
+  return {input: u.input_tokens || 0, output: u.output_tokens || 0,
+          read: u.cache_read_input_tokens || 0, write: u.cache_creation_input_tokens || 0};
+}
+function hitRatio(u) {
+  if (!u) return null;
+  const all = u.input + u.read + u.write;
+  return all ? u.read / all : null;
+}
+function durationOf(ex) {
+  if (ex.timing && ex.timing.total_ms != null) return ex.timing.total_ms;
+  if (!ex.ended_at) return Date.now() - new Date(ex.started_at).getTime();
+  return null;
+}
+function tokensPerSecond(ex) {
+  const u = usageOf(ex), t = ex.timing || {};
+  if (!u || !u.output || t.total_ms == null) return null;
+  const window = t.total_ms - (t.ttft_ms || 0);
+  return window > 0 ? u.output / (window / 1000) : null;
+}
+const isStreaming = ex => !ex.ended_at;
+
+// ---------------------------------------------------------- request structure
+function requestView(ex) {
+  if (ex.normalized_request) return {...ex.normalized_request, rawMessages: inputItems(ex)};
+  const body = ex.request_body;
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    return {system: [], tools: [], messages: [], params: {}, rawMessages: []};
+  const {system, tools: toolDefs, messages, ...params} = body;
+  const blocks = system == null ? [] : typeof system === "string" ? [{type: "text", text: system}]
+    : Array.isArray(system) ? system : [system];
+  const list = Array.isArray(messages) ? messages : [];
+  return {system: blocks, tools: Array.isArray(toolDefs) ? toolDefs : [], messages: list, params, rawMessages: list};
+}
+function inputItems(ex) {
+  const input = ex.request_body && ex.request_body.input;
+  return Array.isArray(input) ? input : [{type: "message", role: "user", content: input}];
+}
+const messageBlocks = m => typeof m.content === "string" ? [{type: "text", text: m.content}]
+  : Array.isArray(m.content) ? m.content.map(b => typeof b === "string" ? {type: "text", text: b} : b) : [];
+function replyMessage(ex) {
+  return {role: "assistant", content: (ex.assembled && ex.assembled.content) || []};
+}
+function blockChars(b) {
+  return typeof b === "string" ? b.length : b && typeof b.text === "string" ? b.text.length : JSON.stringify(b || "").length;
+}
+function contentSize(content) {
+  if (content == null) return 0;
+  if (typeof content === "string") return content.length;
+  if (Array.isArray(content)) return content.reduce((n, p) => n + (p && typeof p.text === "string" ? p.text.length : JSON.stringify(p).length), 0);
+  return JSON.stringify(content).length;
+}
+
+// --------------------------------------------------------------- foldables
+function isOpen(key, fallback) { return openState.has(key) ? openState.get(key) : fallback; }
+
+// A foldable registers on its element so Expand all / Collapse all can reach it.
+function foldable(el, key, fallback, paint) {
+  el.classList.add("fold");
+  el._isOpen = () => isOpen(key, fallback);
+  el._set = open => { openState.set(key, open); paint(open); };
+  paint(el._isOpen());
+  return el;
+}
+function setAll(scope, open) {
+  for (let pass = 0; pass < 40; pass++) {       // opening a JSON node reveals new folds
+    let changed = false;
+    for (const el of scope.querySelectorAll(".fold")) {
+      if (el._isOpen() !== open) { el._set(open); changed = true; }
+    }
+    if (!changed) return;
+  }
+}
+const expandButtons = scopeOf => [
+  h("button", {class: "small", onclick: e => setAll(scopeOf(e), true)}, "Expand all"),
+  h("button", {class: "small", onclick: e => setAll(scopeOf(e), false)}, "Collapse all"),
+];
+
+const isLong = t => t.length > 1000 || t.split("\n", 14).length > 12;
+
+// §6.10.1: long text starts collapsed; short text gets no toggle.
+function longText(text, key, opt = {}) {
+  text = String(text);
+  const cls = opt.mono ? "mono" : "";
+  if (!isLong(text)) return h("div", {class: "lt " + cls}, h("div", {class: "lt-body"}, text));
+  const lines = text.split("\n").length;
+  const body = h("div", {class: "lt-body"}, text);
+  const toggle = h("button", {class: "lt-toggle jf", onclick: () => wrap._set(!wrap._isOpen())});
+  const wrap = h("div", {class: "lt " + cls}, body, toggle);
+  return foldable(wrap, key, !!opt.open, open => {
+    wrap.classList.toggle("closed", !open);
+    toggle.textContent = open ? "Collapse" : `Show all (${lines} lines, ${sizeText(text.length)})`;
+  });
+}
+
+// ------------------------------------------------------------------ JSON tree
+function copyButton(getText, cls) {
+  const btn = h("button", {class: cls || "small", onclick: async e => {
+    e.stopPropagation();
+    const text = typeof getText === "function" ? getText() : getText;
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) {
+      const area = h("textarea", {style: "position:fixed;opacity:0"}, text);
+      document.body.append(area); area.select(); document.execCommand("copy"); area.remove();
+    }
+    btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = "Copy"; }, 1200);
+  }}, "Copy");
+  return btn;
+}
+function jsonBlock(value, key, opt = {}) {
+  return h("div", {class: "jwrap"},
+    copyButton(opt.raw != null ? opt.raw : () => JSON.stringify(value), "jcopy"),
+    h("div", {class: "json"}, jsonNode(value, key, 0, null, !!opt.open)));
+}
+function jsonNode(value, key, depth, label, allOpen) {
+  const lead = label == null ? null : [h("span", {class: "k"}, JSON.stringify(label)), ": "];
+  if (value === null) return h("span", {class: "jn"}, lead, h("span", {class: "u"}, "null"));
+  if (typeof value === "boolean") return h("span", {class: "jn"}, lead, h("span", {class: "b"}, String(value)));
+  if (typeof value === "number") return h("span", {class: "jn"}, lead, h("span", {class: "n"}, String(value)));
+  if (typeof value === "string") return jsonString(value, key, lead, allOpen);
+  const isArray = Array.isArray(value);
+  const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+  const [open_, close_] = isArray ? "[]" : "{}";
+  if (!entries.length) return h("span", {class: "jn"}, lead, open_ + close_);
+  const summary = isArray ? `[…] ${entries.length} item${entries.length === 1 ? "" : "s"}`
+                          : `{…} ${entries.length} key${entries.length === 1 ? "" : "s"}`;
+  const arrow = h("span", {}), head = h("span", {}), kids = h("span", {class: "jkids"}), tail = h("span", {}, close_);
+  let built = false;
+  const toggle = h("button", {class: "jf", "aria-label": "Fold", onclick: () => node._set(!node._isOpen())}, arrow, " ");
+  const node = h("span", {class: "jn"}, toggle, lead, head, kids, tail);
+  // §6.10.2: nodes deeper than 2 levels start folded.
+  return foldable(node, key, allOpen || depth <= 2, open => {
+    arrow.textContent = open ? "▾" : "▸";
+    head.textContent = open ? open_ : summary;
+    kids.style.display = tail.style.display = open ? "" : "none";
+    if (open && !built) {
+      built = true;
+      for (const [k, v] of entries) kids.append(jsonNode(v, key + "/" + k, depth + 1, isArray ? null : k, allOpen));
+    }
+  });
+}
+function parsedJson(text) {
+  const t = text.trim();
+  if (!(t.startsWith("{") || t.startsWith("["))) return undefined;
+  try { const v = JSON.parse(t); return v && typeof v === "object" ? v : undefined; } catch (_) { return undefined; }
+}
+function jsonString(text, key, lead, allOpen) {
+  const parsed = parsedJson(text);
+  const holder = h("span", {class: "s"});
+  const plain = () => isLong(text)
+    ? longText(`"${text}"`, key + "/text", {mono: true, open: allOpen})
+    : h("span", {class: "lt-body"}, JSON.stringify(text));
+  if (parsed === undefined) { holder.append(plain()); return h("span", {class: "jn"}, lead, holder); }
+  const btn = h("button", {class: "fmt"});
+  const fmtKey = key + "/format";
+  const paint = () => {
+    const on = isOpen(fmtKey, false);
+    btn.textContent = on ? "raw" : "format";
+    holder.replaceChildren(on ? h("span", {class: "jwrap", style: "display:block"}, jsonNode(parsed, key + "/parsed", 1, null, allOpen)) : plain());
+  };
+  btn.addEventListener("click", () => { openState.set(fmtKey, !isOpen(fmtKey, false)); paint(); });
+  paint();
+  return h("span", {class: "jn"}, lead, btn, " ", holder);
+}
+// Text that may itself be JSON, such as a tool result.
+function textWithFormat(text, key, opt) {
+  const parsed = parsedJson(text);
+  if (parsed === undefined) return longText(text, key, opt);
+  const holder = h("div", {});
+  const btn = h("button", {class: "fmt", style: "margin-left:0"});
+  const fmtKey = key + "/format";
+  const paint = () => {
+    const on = isOpen(fmtKey, false);
+    btn.textContent = on ? "raw" : "format";
+    holder.replaceChildren(on ? jsonBlock(parsed, key + "/parsed", {raw: text, open: opt && opt.open}) : longText(text, key, {...opt, mono: true}));
+  };
+  btn.addEventListener("click", () => { openState.set(fmtKey, !isOpen(fmtKey, false)); paint(); });
+  paint();
+  return h("div", {}, btn, holder);
+}
+
+// ---------------------------------------------------------------- UI pieces
+function panel(kind, name, count, id, build) {
+  const body = h("div", {class: "body"});
+  const section = h("section", {class: "panel panel-" + kind, id},
+    h("header", {},
+      h("span", {class: "name"}, name),
+      count ? h("span", {class: "muted"}, "· " + count) : null,
+      h("span", {class: "grow"}),
+      expandButtons(() => section)),
+    body);
+  add(body, [build()]);
+  return section;
+}
+function ccBadge(b) { return b && b.cache_control ? h("span", {class: "badge cache", title: JSON.stringify(b.cache_control)}, "cache_control") : null; }
+function badge(type) {
+  const known = ["text", "tool_use", "tool_result", "thinking"].includes(type);
+  return h("span", {class: "badge " + (known ? type : "")}, type || "unknown");
+}
+function renderContent(content, key, opt) {
+  if (content == null) return h("span", {class: "muted"}, "(empty)");
+  if (typeof content === "string") return textWithFormat(content, key, opt);
+  if (Array.isArray(content)) {
+    return h("div", {}, content.map((part, i) => part && part.type === "text"
+      ? textWithFormat(part.text || "", key + "/" + i, opt)
+      : part && part.type === "image" ? imageLine(part)
+      : jsonBlock(part, key + "/" + i, {open: opt && opt.open})));
+  }
+  return jsonBlock(content, key, {open: opt && opt.open});
+}
+function imageLine(b) {
+  const src = b.source || {};
+  const bytes = typeof src.data === "string" ? Math.round(src.data.length * 3 / 4) : null;
+  return h("div", {class: "mono"}, "image · ", src.media_type || src.type || "unknown type", " · ",
+    bytes == null ? (src.url || "size unknown") : `${(bytes / 1024).toFixed(1)} KB`);
+}
+function renderBlock(b, key, opt = {}) {
+  const type = b && b.type;
+  const parts = [];
+  if (type === "text") {
+    parts.push(longText(b.text || "", key + "/text", opt));
+  } else if (type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use") {
+    parts.push(h("div", {class: "mono"}, h("b", {}, b.name), "  ", h("span", {class: "muted"}, "id: " + b.id)));
+    if (b.partial_chars != null) parts.push(h("div", {class: "muted"}, `input arriving… ${sizeText(b.partial_chars)}`));
+    else {
+      parts.push(jsonBlock(b.input, key + "/input", {open: opt.open}));
+      if (b.input_raw != null) parts.push(h("div", {class: "errbox"}, "Input was not valid JSON. As received:\n", b.input_raw));
+    }
+  } else if (type === "tool_result") {
+    parts.push(h("div", {class: "mono muted"}, "tool_use_id: " + b.tool_use_id, "  is_error: " + !!b.is_error, "  size: " + sizeText(contentSize(b.content))));
+    parts.push(renderContent(b.content, key + "/content", opt));
+  } else if (type === "thinking" || type === "redacted_thinking") {
+    const text = b.thinking != null ? b.thinking : b.data || "";
+    const toggle = h("button", {class: "jf", onclick: () => holder._set(!holder._isOpen())});
+    const inner = h("div", {});
+    const holder = h("div", {}, toggle, inner);
+    foldable(holder, key + "/thinking", !!opt.open, open => {
+      toggle.textContent = (open ? "▾ Hide thinking" : "▸ Show thinking") + ` (${sizeText(text.length)})`;
+      inner.replaceChildren(...(open ? [longText(text, key + "/thinkingtext", opt)] : []));
+    });
+    parts.push(holder);
+  } else if (type === "image") {
+    parts.push(imageLine(b));
+  } else {
+    parts.push(jsonBlock(b, key + "/raw", {open: opt.open}));
+  }
+  const isErr = type === "tool_result" && b.is_error;
+  return h("div", {class: "block " + (type || "")},
+    h("div", {class: "bhead"}, badge(type), ccBadge(b), isErr ? h("span", {class: "badge error"}, "is_error") : null),
+    parts);
+}
+function messageCard(ex, m, index, keyPrefix, opt = {}) {
+  const role = m.role || "unknown";
+  const flagged = messageBlocks(m).some(b => b && b.cache_control);
+  return h("div", {class: "card " + role},
+    h("div", {class: "chead"}, `${role} #${index}`, flagged ? h("span", {class: "badge cache"}, "cache_control") : null,
+      h("span", {class: "grow"}),
+      h("a", {href: `#/exchange/${ex.id}/message/${index}`, class: "small"}, "Open")),
+    h("div", {class: "cbody"}, messageBlocks(m).map((b, i) => {
+      const key = `${keyPrefix}${index}/b${i}`;
+      if (opt.pairs && b && b.type === "tool_result") {
+        return [renderBlock(b, key, opt), pairRow(b.tool_use_id, key + "/pair", {ex})];
+      }
+      return renderBlock(b, key, opt);
+    })));
+}
+const exchangeLink = (label, hash) => h("button", {class: "jump", onclick: e => { e.stopPropagation(); location.hash = hash; }}, label);
+
+// §6.4. Replaced in place whenever its entry changes.
+function pairRow(toolId, key, ctx = {}) {
+  const make = () => {
+    const entry = tools.get(toolId);
+    const shown = entry || (ctx.call && {tool_use_id: toolId, name: ctx.call.name, input: ctx.call.input, status: "pending",
+      call_exchange: ctx.ex.id, call_message: requestView(ctx.ex).messages.length, result_exchange: null});
+    const el = shown ? pairBody(shown, key) : pairFromHistory(toolId, key, ctx);
+    el.dataset.pair = toolId;
+    el._remake = make;
+    return el;
+  };
+  return make();
+}
+function statusBadge(status) {
+  const label = {pending: "pending", paired: "paired", no_result: "no result"}[status] || status;
+  return h("span", {class: "badge " + status}, label);
+}
+function pairBody(e, key) {
+  const callHash = `#/exchange/${e.call_exchange}/reply`;
+  const resultHash = `#/exchange/${e.result_exchange}/request`;
+  const route_ = e.result_exchange != null
+    ? [exchangeLink(`reply #${e.call_exchange}`, callHash), " → ", exchangeLink(`request #${e.result_exchange}`, resultHash)]
+    : [exchangeLink(`reply #${e.call_exchange}`, callHash), " → waiting"];
+  const left = h("div", {class: "side"},
+    h("span", {class: "plabel gap"}, statusBadge(e.status), route_,
+      exchangeLink("open message", `#/exchange/${e.call_exchange}/message/${e.call_message}`)),
+    h("div", {class: "mono"}, h("b", {}, e.name), " ", h("span", {class: "muted"}, e.tool_use_id)),
+    jsonBlock(e.input, key + "/in"));
+  let right;
+  if (e.status === "paired") {
+    right = h("div", {class: "side" + (e.is_error ? " iserr" : "")},
+      h("span", {class: "plabel gap"}, e.is_error ? h("span", {class: "badge error"}, "is_error") : null,
+        h("span", {class: "muted"}, sizeText(e.result_size || 0)),
+        e.call_to_result_ms != null ? h("span", {class: "muted"}, ms(e.call_to_result_ms) + " after the reply") : null,
+        exchangeLink("open message", `#/exchange/${e.result_exchange}/message/${e.result_message}`)),
+      renderContent(e.result, key + "/out", {}));
+  } else {
+    right = h("div", {class: "side muted"}, e.status === "no_result"
+      ? "No result: the conversation moved on without one."
+      : "Pending: the result arrives with a later request.");
+  }
+  return h("div", {class: "pair"}, left, right);
+}
+// A result whose call predates the index (before a clear, or the proxy started).
+function pairFromHistory(toolId, key, ctx) {
+  let call = null;
+  if (ctx.ex) {
+    for (const m of requestView(ctx.ex).messages)
+      for (const b of messageBlocks(m)) if (b && b.type === "tool_use" && b.id === toolId) call = b;
+  }
+  return h("div", {class: "pair"},
+    h("div", {class: "side"}, h("span", {class: "plabel muted"}, "Call seen only in this request's history"),
+      call ? [h("div", {class: "mono"}, h("b", {}, call.name)), jsonBlock(call.input, key + "/in")] : h("span", {class: "muted"}, "Call not seen.")),
+    h("div", {class: "side muted"}, "The result is shown in the block above."));
+}
+function refreshPairs(toolId) {
+  for (const el of document.querySelectorAll("[data-pair]")) {
+    if (el.dataset.pair === toolId && el._remake) el.replaceWith(el._remake());
+  }
+}
+
+// ------------------------------------------------------------------ list rows
+function rowText(ex) {
+  const u = usageOf(ex), t = ex.timing || {};
+  return {
+    model: (ex.assembled && ex.assembled.model) || (ex.request_body && ex.request_body.model) || ex.path,
+    l2: [ms(durationOf(ex)), u ? `${kilo(u.input)} in / ${kilo(u.output)} out` : "— tokens",
+         `cache ${pct(hitRatio(u))}`, money(ex.cost_usd)],
+    l3: [`read ${u ? kilo(u.read) : "—"}`, `write ${u ? kilo(u.write) : "—"}`, `ttfb ${ms(t.ttfb_ms)}`, `ttft ${ms(t.ttft_ms)}`,
+         tokensPerSecond(ex) != null ? `${Math.round(tokensPerSecond(ex))} tok/s` : "— tok/s"],
+    stop: (ex.assembled && ex.assembled.stop_reason) || "",
+  };
+}
+function paintRow(ex) {
+  let row = rows.get(ex.id);
+  if (!row) {
+    row = h("div", {class: "row", role: "option", tabindex: 0, data: {id: ex.id},
+      onclick: () => { location.hash = `#/exchange/${ex.id}/${currentTab()}`; }});
+    rows.set(ex.id, row);
+    const list = $("list");
+    const newer = [...rows.keys()].filter(k => k > ex.id).sort((a, b) => a - b)[0];
+    list.insertBefore(row, newer != null ? rows.get(newer).nextSibling : list.firstChild);
+    updateCount();
+  }
+  const r = rowText(ex);
+  const bad = ex.error || (ex.status != null && ex.status >= 400);
+  row.replaceChildren(
+    h("div", {class: "l1"},
+      h("b", {class: "mono"}, "#" + ex.id),
+      h("span", {class: "muted"}, clock(ex.started_at)),
+      isStreaming(ex) ? h("span", {class: "spinner", title: "Streaming", role: "img", "aria-label": "Streaming"}) : null,
+      h("span", {class: "model", title: r.model}, r.model),
+      h("span", {class: "status" + (bad ? " bad" : "")}, ex.status != null ? ex.status : ex.error ? "err" : "…"),
+      r.stop ? h("span", {class: "muted mono"}, r.stop) : null),
+    h("div", {class: "l2"}, h("b", {}, r.l2.join(" · "))),
+    h("div", {class: "l3"}, r.l3.join(" · ")));
+  row.classList.toggle("selected", ex.id === selectedId);
+  row.style.display = matches(ex) ? "" : "none";
+}
+function searchText(ex) {
+  let s = searchCache.get(ex.id);
+  if (s == null) {
+    s = (ex.path + " " + JSON.stringify(ex.request_body) + " " + JSON.stringify(ex.assembled) + " " + JSON.stringify(ex.response_body)).toLowerCase();
+    searchCache.set(ex.id, s);
+  }
+  return s;
+}
+function matches(ex) { return !filterText || searchText(ex).includes(filterText); }
+function applyFilter() {
+  if (!filterText) searchCache.clear();
+  for (const ex of exchanges.values()) { const row = rows.get(ex.id); if (row) row.style.display = matches(ex) ? "" : "none"; }
+  updateCount();
+}
+function updateCount() {
+  const shown = filterText ? [...exchanges.values()].filter(matches).length : exchanges.size;
+  $("count").textContent = (filterText ? `${shown} of ` : "") + `${exchanges.size} exchange${exchanges.size === 1 ? "" : "s"}`;
+}
+
+// -------------------------------------------------------------------- summary
+function sessionStats() {
+  const list = [...exchanges.values()];
+  const models = list.filter(ex => usageOf(ex));
+  const totals = {input: 0, output: 0, read: 0, write: 0, cost: 0, priced: 0};
+  for (const ex of models) {
+    const u = usageOf(ex);
+    totals.input += u.input; totals.output += u.output; totals.read += u.read; totals.write += u.write;
+    if (ex.cost_usd != null) { totals.cost += ex.cost_usd; totals.priced++; }
+  }
+  const done = list.filter(ex => ex.is_model_call && ex.timing && ex.timing.total_ms != null);
+  const avg = done.length ? done.reduce((n, ex) => n + ex.timing.total_ms, 0) / done.length : null;
+  let wall = null;
+  if (list.length) {
+    const first = Math.min(...list.map(ex => new Date(ex.started_at).getTime()));
+    const last = Math.max(...list.map(ex => ex.ended_at ? new Date(ex.ended_at).getTime() : Date.now()));
+    wall = last - first;
+  }
+  return {count: list.length, modelCalls: list.filter(ex => ex.is_model_call).length, totals, avg, wall, hit: hitRatio(totals)};
+}
+function paintSummary() {
+  const s = sessionStats(), t = s.totals;
+  const tile = (metric, value, label) => h("button", {class: "tile", title: "Show the exchanges behind this number",
+    onclick: () => { location.hash = `#/stats/${metric}`; }}, h("b", {}, value), h("span", {}, label));
+  $("summary").replaceChildren(
+    tile("requests", num(s.count), `requests · ${s.modelCalls} model calls`),
+    tile("tokens", kilo(t.input + t.output + t.read + t.write), `tokens · ${kilo(t.input)} in · ${kilo(t.output)} out · ${kilo(t.read)} read · ${kilo(t.write)} write`),
+    tile("cost", t.priced ? money(t.cost) : "—", "estimated cost"),
+    tile("wall", ms(s.wall), "wall clock"),
+    tile("latency", ms(s.avg), "average latency"),
+    tile("cache", pct(s.hit), "cache hit"));
+}
+
+// ---------------------------------------------------------------- detail view
+const TABS = [["request", "Request"], ["reply", "Reply"], ["tools", "Tools"], ["diff", "Diff"], ["raw", "Raw"]];
+function currentTab() { return route.tab && route.tab !== "tools" ? route.tab : "request"; }
+function paintTabs() {
+  const active = route.view === "tools" ? "tools" : route.tab;
+  const hashFor = key => key === "tools" ? "#/tools" : selectedId != null ? `#/exchange/${selectedId}/${key}` : "";
+  $("tabs").replaceChildren(
+    ...TABS.map(([key, label]) => h("button", {class: "tab" + (active === key ? " active" : ""), data: {tab: key},
+      onclick: () => { const to = hashFor(key); if (to) location.hash = to; }}, label)),
+    h("span", {class: "grow"}),
+    ...expandButtons(() => $("content")));
+}
+function paintStrip() {
+  const ex = exchanges.get(selectedId);
+  if (!ex) { $("strip").replaceChildren(); return; }
+  const u = usageOf(ex), t = ex.timing || {};
+  const stat = (metric, label, value) => h("button", {class: "stat", title: "Show where this number comes from",
+    onclick: () => { location.hash = `#/stats/${metric}/${ex.id}`; }}, h("i", {}, label), value);
+  $("strip").replaceChildren(
+    stat("input", "input", u ? num(u.input) : "—"), stat("output", "output", u ? num(u.output) : "—"),
+    stat("read", "cache read", u ? num(u.read) : "—"), stat("write", "cache write", u ? num(u.write) : "—"),
+    stat("cost", "cost", money(ex.cost_usd)), stat("total", "total", ms(durationOf(ex))),
+    stat("ttfb", "first byte", ms(t.ttfb_ms)), stat("ttft", "first token", ms(t.ttft_ms)),
+    stat("tps", "tok/s", tokensPerSecond(ex) != null ? tokensPerSecond(ex).toFixed(1) : "—"));
+}
+function paintDetail() {
+  paintTabs();
+  paintStrip();
+  replyView = null;
+  const content = $("content");
+  const scroll = content.scrollTop;
+  content.replaceChildren(buildView());
+  content.scrollTop = scroll;
+}
+function buildView() {
+  if (route.view === "tools") return toolsView(route.name);
+  if (route.view === "stats") return statsView(route.metric, route.id);
+  if (route.view === "none") return h("div", {class: "empty"}, exchanges.size ? "Select an exchange." : "Waiting for traffic. Send a prompt through the proxy.");
+  const ex = exchanges.get(route.id);
+  if (!ex) return h("div", {class: "empty"}, `Exchange #${route.id} is not in the buffer.`);
+  if (route.view === "message") return messageView(ex, route.message);
+  return {request: requestTab, reply: replyTab, diff: diffTab, raw: rawTab}[route.tab](ex);
+}
+
+// Request tab, §6.2
+function requestTab(ex) {
+  const v = requestView(ex);
+  const earlier = v.messages.slice(0, -1);
+  const last = v.messages[v.messages.length - 1];
+  const sysChars = v.system.reduce((n, b) => n + blockChars(b), 0);
+  const sysCount = `${v.system.length} block${v.system.length === 1 ? "" : "s"} · ${sysChars.toLocaleString("en-US")} chars · ~${kilo(Math.round(sysChars / 4))} tokens`;
+  const jumpTo = (id, label, color) => h("button", {style: `border-left-color:var(--${color})`,
+    onclick: () => { const el = $(id); if (el) el.scrollIntoView({block: "start"}); $("content").scrollTop -= 38; }}, label);
+  const nothing = text => h("div", {class: "muted"}, text);
+  const body = ex.request_body;
+  const notMessages = !ex.is_model_call && body != null;
+  return h("div", {style: "--stick:36px"},
+    h("nav", {id: "index"}, jumpTo("p-system", "System", "system"), jumpTo("p-tools", "Tools", "tools"),
+      jumpTo("p-conv", "Conversation", "conv"), jumpTo("p-new", "New message", "new")),
+    h("div", {class: "muted", style: "font-size:12px"}, `${ex.method} `, h("span", {class: "mono"}, ex.path)),
+    panel("system", "System instructions", sysCount, "p-system", () => v.system.length
+      ? v.system.map((b, i) => {
+          const text = typeof b === "string" ? b : b.text;
+          return h("div", {class: "block"},
+            h("div", {class: "bhead"}, `block ${i + 1}`, h("span", {class: "muted"}, `${(text || "").length.toLocaleString("en-US")} chars · ~${kilo(Math.round((text || "").length / 4))} tokens`), ccBadge(b)),
+            text != null ? longText(text, `sys/${i}`) : jsonBlock(b, `sys/${i}`));
+        })
+      : nothing("This request has no system field.")),
+    panel("tools", "Tools", String(v.tools.length), "p-tools", () => v.tools.length
+      ? v.tools.map((tool, i) => toolDefinition(tool, `tooldef/${i}`))
+      : nothing("This request defines no tools.")),
+    panel("conv", "Conversation so far", `${earlier.length} message${earlier.length === 1 ? "" : "s"}`, "p-conv", () => earlier.length
+      ? earlier.map((m, i) => messageCard(ex, m, i, "m"))
+      : nothing("No earlier messages.")),
+    panel("new", "New message", last ? `${last.role} #${v.messages.length - 1}` : "", "p-new", () => last
+      ? messageCard(ex, last, v.messages.length - 1, "m", {pairs: true})
+      : nothing("This request has no messages.")),
+    panel("params", "Other parameters", null, "p-params", () => paramsTable(v.params)),
+    notMessages ? panel("params", "Request body", "not a Messages API request", "p-body", () => typeof body === "string"
+      ? longText(body, "reqbody", {mono: true}) : jsonBlock(body, "reqbody")) : null);
+}
+function toolDefinition(tool, key) {
+  const schema = tool.input_schema != null ? tool.input_schema : tool.parameters;
+  const toggle = h("button", {class: "jf", onclick: () => box._set(!box._isOpen())});
+  const inner = h("div", {});
+  const box = h("div", {}, toggle, inner);
+  foldable(box, key + "/schemaopen", false, open => {
+    toggle.textContent = (open ? "▾" : "▸") + " Input schema";
+    inner.replaceChildren(...(open ? [jsonBlock(schema === undefined ? null : schema, key + "/schema")] : []));
+  });
+  return h("div", {class: "block"},
+    h("div", {class: "bhead"}, h("b", {class: "mono", style: "font-size:13px"}, tool.name || tool.type || "unnamed"),
+      tool.type ? h("span", {class: "muted mono"}, tool.type) : null, ccBadge(tool)),
+    tool.description ? longText(tool.description, key + "/desc") : h("div", {class: "muted"}, "No description."),
+    schema !== undefined ? box : h("details", {}, h("summary", {}, "Definition"), jsonBlock(tool, key + "/def")));
+}
+function paramsTable(params) {
+  const entries = Object.entries(params || {});
+  if (!entries.length) return h("div", {class: "muted"}, "None.");
+  return h("table", {class: "t"}, h("tbody", {}, entries.map(([k, v]) => h("tr", {},
+    h("th", {class: "mono", style: "width:170px"}, k),
+    h("td", {class: "mono"}, v !== null && typeof v === "object" ? jsonBlock(v, "param/" + k) : typeof v === "string" ? longText(v, "param/" + k, {mono: true}) : String(v))))));
+}
+
+// Reply tab, §6.3. Patched block by block while streaming, so open states,
+// scrolling and selections elsewhere are untouched.
+function replyTab(ex) {
+  const blocks = h("div", {});
+  const meta = h("div", {});
+  const root = h("div", {}, panel("reply", "Reply", null, "p-reply", () => [
+    blocks, meta]));
+  replyView = {id: ex.id, blocks, meta, signatures: [], metaSig: null};
+  updateReply(ex);
+  return root;
+}
+function blockSignature(b) {
+  return JSON.stringify([b.type, (b.text || "").length, (b.thinking || "").length, b.partial_chars, b.id, b.input === undefined ? 0 : JSON.stringify(b.input).length, b.citations ? b.citations.length : 0]);
+}
+function replyBlock(ex, b, i) {
+  const key = `r/b${i}`;
+  const el = renderBlock(b, key);
+  if (b.type === "tool_use" && b.id) el.append(pairRow(b.id, key + "/pair", {ex, call: b}));
+  return el;
+}
+function updateReply(ex) {
+  const view = replyView;
+  if (!view || view.id !== ex.id) return;
+  const content = (ex.assembled && ex.assembled.content) || [];
+  content.forEach((b, i) => {
+    if (!b) return;
+    const sig = blockSignature(b);
+    if (view.signatures[i] === sig) return;
+    view.signatures[i] = sig;
+    const el = replyBlock(ex, b, i);
+    const old = view.blocks.children[i];
+    if (old) old.replaceWith(el); else view.blocks.append(el);
+  });
+  const a = ex.assembled || {};
+  const sig = JSON.stringify([a.stop_reason, a.model, a.usage, ex.status, ex.error, ex.ended_at, ex.response_body != null]);
+  if (view.metaSig === sig) return;
+  view.metaSig = sig;
+  view.meta.replaceChildren(...replyMeta(ex));
+}
+function replyMeta(ex) {
+  const a = ex.assembled || {}, u = usageOf(ex);
+  const out = [];
+  if (isStreaming(ex)) out.push(h("div", {class: "gap muted", style: "margin:8px 0"}, h("span", {class: "spinner"}), ex.status == null ? "Waiting for the upstream…" : "Streaming…"));
+  if (ex.error) out.push(h("div", {class: "errbox"}, ex.error));
+  if (ex.response_body != null) {
+    out.push(h("div", {class: "muted", style: "margin-top:8px"}, ex.assembled.content.length ? "Response body" : "Response body (not a model reply)"));
+    out.push(typeof ex.response_body === "string" ? longText(ex.response_body, "r/body", {mono: true}) : jsonBlock(ex.response_body, "r/body"));
+  }
+  out.push(h("table", {class: "t", style: "margin:10px 0"}, h("tbody", {},
+    h("tr", {}, h("th", {style: "width:110px"}, "stop_reason"), h("td", {class: "mono"}, a.stop_reason || "—")),
+    h("tr", {}, h("th", {}, "model"), h("td", {class: "mono"}, a.model || "—")))));
+  const cell = (label, value) => h("div", {}, h("b", {}, value), h("span", {class: "muted", style: "font-size:11.5px"}, label));
+  out.push(h("div", {class: "usage"},
+    cell("input", u ? num(u.input) : "—"), cell("output", u ? num(u.output) : "—"),
+    cell("cache read", u ? num(u.read) : "—"), cell("cache write", u ? num(u.write) : "—"),
+    cell("cache hit", pct(hitRatio(u)))));
+  return out;
+}
+
+// Diff, §6.7
+function findPrevious(ex) {
+  const key = ex.conversation;
+  if (!key) return null;
+  const earlier = [...exchanges.values()].filter(o => o.id < ex.id && o.conversation && o.conversation.system === key.system).sort((a, b) => b.id - a.id);
+  for (const o of earlier) {
+    const m = o.conversation.messages;
+    if (m.length <= key.messages.length && m.every((d, i) => d === key.messages[i])) return {other: o, common: m.length, exact: true};
+  }
+  let best = null;           // the harness edited history: nearest shared prefix
+  for (const o of earlier) {
+    let n = 0;
+    const m = o.conversation.messages;
+    while (n < m.length && n < key.messages.length && m[n] === key.messages[n]) n++;
+    if (n > 0 && (!best || n > best.common)) best = {other: o, common: n, exact: false};
+  }
+  return best;
+}
+function diffTab(ex) {
+  const v = requestView(ex);
+  const prev = findPrevious(ex);
+  if (!ex.is_model_call) return h("div", {class: "empty"}, "This exchange is not a model request, so there is nothing to compare.");
+  const head = prev
+    ? [`Compared with `, exchangeLink(`request #${prev.other.id}`, `#/exchange/${prev.other.id}/request`), `: `,
+       h("b", {}, `${prev.common} message${prev.common === 1 ? "" : "s"} resent unchanged`), `, `,
+       h("b", {}, `${v.messages.length - prev.common} new`), ` of ${v.messages.length}.`,
+       prev.exact ? "" : ` The earlier request continues differently after message #${prev.common - 1}, so the harness edited or branched its history.`]
+    : ["First request of this conversation in the buffer: every message is new."];
+  const start = prev ? prev.common : 0;
+  const fresh = v.messages.slice(start);
+  return h("div", {},
+    panel("new", "New since the previous request", `${fresh.length} message${fresh.length === 1 ? "" : "s"}`, "p-diff", () => [
+      h("div", {style: "margin-bottom:8px"}, head),
+      h("div", {class: "muted", style: "font-size:12px;margin-bottom:6px"}, "Compared by message content, ignoring cache_control markers, which harnesses move between turns."),
+      fresh.length ? fresh.map((m, i) => messageCard(ex, m, start + i, "m")) : h("div", {class: "muted"}, "Nothing new: the same messages were sent again.")]));
+}
+
+// Raw, §6.8
+function rawTab(ex) {
+  const root = h("div", {});
+  const eventsText = () => ex.response_events.map(e => e.raw).join("\n\n");
+  const build = full => {
+    const rawBody = full && full.request_raw != null ? full.request_raw : null;
+    root.replaceChildren(
+      rawPanel("Request headers", () => JSON.stringify(ex.request_headers, null, 2), () => jsonBlock(ex.request_headers, "raw/reqh")),
+      rawPanel("Response headers", () => JSON.stringify(ex.response_headers, null, 2), () => jsonBlock(ex.response_headers, "raw/resh")),
+      rawPanel("Raw request JSON", () => rawBody != null ? rawBody : JSON.stringify(ex.request_body), () =>
+        typeof ex.request_body === "string" || ex.request_body == null
+          ? longText(ex.request_body || "(no body)", "raw/req", {mono: true})
+          : jsonBlock(ex.request_body, "raw/req", {raw: () => rawBody != null ? rawBody : JSON.stringify(ex.request_body)})),
+      ex.response_events.length
+        ? rawPanel("Raw SSE lines", eventsText, () => longText(eventsText(), "raw/sse", {mono: true}))
+        : rawPanel("Raw response body", () => typeof ex.response_body === "string" ? ex.response_body : JSON.stringify(ex.response_body), () =>
+            typeof ex.response_body === "string" || ex.response_body == null
+              ? longText(ex.response_body || "(no body)", "raw/res", {mono: true})
+              : jsonBlock(ex.response_body, "raw/res")));
+  };
+  build(null);
+  fetch(`/api/exchanges/${ex.id}`).then(r => r.ok ? r.json() : null).then(full => {
+    if (full && root.isConnected) build(full);
+  }).catch(() => {});
+  return root;
+}
+function rawPanel(name, getText, build) {
+  const body = h("div", {class: "body"});
+  const section = h("section", {class: "panel panel-params"},
+    h("header", {}, h("span", {class: "name"}, name), h("span", {class: "grow"}), copyButton(getText), expandButtons(() => section)),
+    body);
+  add(body, [build()]);
+  return section;
+}
+
+// Opening a message, §6.6
+function messageView(ex, index) {
+  const v = requestView(ex);
+  const isReply = index === v.messages.length;
+  const m = isReply ? replyMessage(ex) : v.messages[index];
+  if (!m) return h("div", {class: "empty"}, `Exchange #${ex.id} has no message #${index}.`);
+  const raw = isReply ? m : v.rawMessages[index] !== undefined ? v.rawMessages[index] : m;
+  const blocks = messageBlocks(m);
+  const nav = (label, n) => n >= 0 && n <= v.messages.length ? h("a", {href: `#/exchange/${ex.id}/message/${n}`}, label) : null;
+  return h("div", {},
+    h("div", {class: "gap", style: "margin:12px 0 6px"},
+      h("a", {href: `#/exchange/${ex.id}/${isReply ? "reply" : "request"}`}, `← Exchange #${ex.id}`),
+      nav("Previous message", index - 1), nav("Next message", index + 1)),
+    panel(isReply ? "reply" : m.role === "user" ? "new" : "conv", `${m.role} #${index}`,
+      isReply ? `the reply; it would be messages[${index}] in the next request` : `position ${index} of ${v.messages.length} in messages · request #${ex.id}`, "p-msg", () => [
+        h("div", {class: "muted", style: "margin-bottom:6px"}, `${blocks.length} content block${blocks.length === 1 ? "" : "s"}`),
+        blocks.map((b, i) => [
+          renderBlock(b, `open/${ex.id}/${index}/b${i}`, {open: true}),
+          b && b.type === "tool_use" && b.id && tools.has(b.id) ? pairRow(b.id, `open/${ex.id}/${index}/p${i}`, {ex}) : null,
+          b && b.type === "tool_result" && tools.has(b.tool_use_id) ? pairRow(b.tool_use_id, `open/${ex.id}/${index}/p${i}`, {ex}) : null]),
+      ]),
+    rawPanel("Raw JSON", () => JSON.stringify(raw), () => jsonBlock(raw, `open/${ex.id}/${index}/raw`)));
+}
+
+// Tools view, §6.4 and §6.5
+function toolStats() {
+  const byName = new Map();
+  for (const e of tools.values()) {
+    let s = byName.get(e.name);
+    if (!s) byName.set(e.name, s = {name: e.name, calls: 0, errors: 0, sizes: [], times: []});
+    s.calls++;
+    if (e.is_error) s.errors++;
+    if (e.status === "paired") s.sizes.push(e.result_size || 0);
+    if (e.call_to_result_ms != null) s.times.push(e.call_to_result_ms);
+  }
+  return [...byName.values()].sort((a, b) => b.calls - a.calls);
+}
+const mean = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+function toolsView(name) {
+  const stats = toolStats();
+  const list = [...tools.entries()].filter(([, e]) => !name || e.name === name)
+    .sort((a, b) => b[1].call_exchange - a[1].call_exchange);
+  return h("div", {id: "toolsview"},
+    panel("tools", "Tool usage", `${stats.length} tool${stats.length === 1 ? "" : "s"}`, "p-usage", () => stats.length
+      ? h("table", {class: "t"},
+          h("thead", {}, h("tr", {}, ["Tool", "Calls", "Errors", "Avg result size", "Avg call to result"].map(t => h("th", {}, t)))),
+          h("tbody", {}, stats.map(s => h("tr", {class: "click" + (s.name === name ? " selected" : ""), title: `List every ${s.name} call and its result`,
+            onclick: () => { location.hash = `#/tools/${encodeURIComponent(s.name)}`; }},
+            h("td", {class: "mono"}, h("a", {href: `#/tools/${encodeURIComponent(s.name)}`}, s.name)), h("td", {}, s.calls), h("td", {}, s.errors),
+            h("td", {}, s.sizes.length ? sizeText(Math.round(mean(s.sizes))) : "—"), h("td", {}, ms(mean(s.times)))))))
+      : h("div", {class: "muted"}, "No tool calls yet.")),
+    panel("reply", name ? `${name} calls` : "All tool calls", `${list.length}, newest first`, "p-pairs", () => [
+      name ? h("a", {href: "#/tools"}, "Show all tools") : null,
+      list.map(([id]) => pairRow(id, `toolsview/${id}`))]));
+}
+
+// What a statistic is made of, §6.5
+const METRICS = {
+  requests: {label: "Requests", value: () => 1, show: ex => ex.method + " " + ex.path, filter: () => true},
+  tokens: {label: "Tokens", value: ex => { const u = usageOf(ex); return u ? u.input + u.output + u.read + u.write : null; }, show: num},
+  input: {label: "Input tokens", value: ex => (usageOf(ex) || {}).input, show: num},
+  output: {label: "Output tokens", value: ex => (usageOf(ex) || {}).output, show: num},
+  read: {label: "Cache read tokens", value: ex => (usageOf(ex) || {}).read, show: num},
+  write: {label: "Cache write tokens", value: ex => (usageOf(ex) || {}).write, show: num},
+  cost: {label: "Estimated cost", value: ex => ex.cost_usd, show: money},
+  wall: {label: "Duration", value: ex => (ex.timing || {}).total_ms, show: ms},
+  total: {label: "Total duration", value: ex => (ex.timing || {}).total_ms, show: ms},
+  latency: {label: "Latency of model calls", value: ex => ex.is_model_call ? (ex.timing || {}).total_ms : null, show: ms},
+  ttfb: {label: "Time to first byte", value: ex => (ex.timing || {}).ttfb_ms, show: ms},
+  ttft: {label: "Time to first token", value: ex => (ex.timing || {}).ttft_ms, show: ms},
+  tps: {label: "Output tokens per second", value: tokensPerSecond, show: v => v == null ? "—" : v.toFixed(1)},
+  cache: {label: "Cache hit", value: ex => hitRatio(usageOf(ex)), show: pct},
+};
+function statsView(metric, id) {
+  const def = METRICS[metric];
+  if (!def) return h("div", {class: "empty"}, "Unknown statistic.");
+  let list = [...exchanges.values()].sort((a, b) => b.id - a.id);
+  if (id != null) list = list.filter(ex => ex.id === id);
+  else if (!def.filter) list = list.filter(ex => def.value(ex) != null);
+  const lastIndex = ex => requestView(ex).messages.length;
+  const table = h("table", {class: "t"},
+    h("thead", {}, h("tr", {}, ["Exchange", "Time", "Model", def.label, "Messages"].map(t => h("th", {}, t)))),
+    h("tbody", {}, list.map(ex => {
+      const n = lastIndex(ex);
+      const value = def.value(ex);
+      return h("tr", {class: "click", onclick: () => { location.hash = `#/exchange/${ex.id}/request`; }},
+        h("td", {class: "mono"}, "#" + ex.id), h("td", {}, clock(ex.started_at)),
+        h("td", {class: "mono"}, (ex.assembled && ex.assembled.model) || (ex.request_body && ex.request_body.model) || "—"),
+        h("td", {}, metric === "requests" ? def.show(ex) : def.show(value)),
+        h("td", {class: "gap"}, n > 0 ? exchangeLink("new message", `#/exchange/${ex.id}/message/${n - 1}`) : null,
+          ex.is_model_call ? exchangeLink("reply", `#/exchange/${ex.id}/message/${n}`) : null));
+    })));
+  const one = id != null ? list[0] : null;
+  return h("div", {},
+    panel("reply", label(def, id), id != null ? "" : `${list.length} exchange${list.length === 1 ? "" : "s"}`, "p-stat", () => [
+      list.length ? table : h("div", {class: "muted"}, "No exchanges behind this number yet."),
+      one ? h("div", {style: "margin-top:10px"}, h("div", {class: "muted"}, "Source values"),
+        jsonBlock({usage: (one.assembled && one.assembled.usage) || null, timing: one.timing, cost_usd: one.cost_usd,
+          cost_formula: "(input × in_price + output × out_price + cache_read × read_price + cache_write × write_price) / 1,000,000, prices from pricing.json"}, "stat/src")) : null]));
+}
+const label = (def, id) => id != null ? `${def.label} of #${id}` : `Exchanges behind: ${def.label}`;
+
+// --------------------------------------------------------------------- router
+function parseRoute() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "exchange" && /^\d+$/.test(parts[1] || "")) {
+    const id = Number(parts[1]);
+    if (parts[2] === "message" && /^\d+$/.test(parts[3] || "")) return {view: "message", id, message: Number(parts[3]), tab: "request"};
+    const tab = ["request", "reply", "diff", "raw"].includes(parts[2]) ? parts[2] : "request";
+    return {view: "tab", id, tab};
+  }
+  if (parts[0] === "tools") return {view: "tools", name: parts[1] ? decodeURIComponent(parts[1]) : null};
+  if (parts[0] === "stats" && parts[1]) return {view: "stats", metric: parts[1], id: /^\d+$/.test(parts[2] || "") ? Number(parts[2]) : null};
+  return {view: "none"};
+}
+function onRoute() {
+  route = parseRoute();
+  if (route.id != null && route.view !== "stats") selectedId = route.id;
+  else if (route.view === "stats" && route.id != null) selectedId = route.id;
+  for (const [id, row] of rows) row.classList.toggle("selected", id === selectedId);
+  const row = rows.get(selectedId);
+  if (row) row.scrollIntoView({block: "nearest"});
+  $("content").scrollTop = 0;
+  paintDetail();
+}
+
+// ----------------------------------------------------------------- live events
+function blank(id, data) {
+  return {id, started_at: data.time, ended_at: null, method: data.method, path: data.path, status: null,
+    request_headers: data.headers, request_body: data.body, normalized_request: data.normalized_request,
+    is_model_call: data.is_model_call, conversation: data.conversation, response_headers: {}, response_events: [],
+    response_body: null, assembled: {model: null, content: [], stop_reason: null, usage: null},
+    timing: {ttfb_ms: null, ttft_ms: null, total_ms: null}, cost_usd: null, error: null};
+}
+function applyPatch(a, p) {
+  if (p.op === "meta") Object.assign(a, p.set);
+  else if (p.op === "block") a.content[p.i] = p.block;
+  else if (p.op === "append") { const b = a.content[p.i]; if (b) b[p.field] = (b[p.field] || "") + p.text; }
+  else if (p.op === "partial") { const b = a.content[p.i]; if (b) b.partial_chars = p.chars; }
+}
+function finishFields(ex, d) {
+  Object.assign(ex, {ended_at: d.ended_at, assembled: d.assembled, timing: d.timing, cost_usd: d.cost_usd, response_body: d.response_body});
+  if (d.error !== undefined) ex.error = d.error;
+}
+function applyEvent(name, d) {
+  if (name === "snapshot") {
+    exchanges.clear(); rows.clear(); searchCache.clear(); $("list").replaceChildren();
+    for (const ex of [...d].sort((a, b) => a.id - b.id)) { exchanges.set(ex.id, ex); paintRow(ex); }
+    updateCount(); paintSummary(); paintDetail();
+    return;
+  }
+  if (name === "tool_index") {
+    tools = new Map(Object.entries(d));
+    paintDetail();
+    return;
+  }
+  if (name === "tool_paired" || name === "tool_update") {
+    tools.set(d.tool_use_id, d);
+    refreshPairs(d.tool_use_id);
+    if (route.view === "tools") paintToolsUsage();
+    return;
+  }
+  if (name === "exchange_evicted") {
+    exchanges.delete(d.id); searchCache.delete(d.id);
+    const row = rows.get(d.id); if (row) row.remove(); rows.delete(d.id);
+    for (const [k, e] of tools) if (e.call_exchange === d.id) tools.delete(k);
+    updateCount(); markDirty(null);
+    return;
+  }
+  if (name === "exchange_started") {
+    const ex = blank(d.id, d);
+    exchanges.set(d.id, ex);
+    paintRow(ex);
+    updateCount(); markDirty(d.id);
+    if (route.view === "none") { location.hash = `#/exchange/${d.id}/request`; }
+    return;
+  }
+  const ex = exchanges.get(d.id);
+  if (!ex) return;      // cleared or evicted while still streaming
+  searchCache.delete(d.id);
+  if (name === "exchange_response") {
+    ex.status = d.status; ex.response_headers = d.headers; ex.timing = {...ex.timing, ...d.timing};
+  } else if (name === "exchange_delta") {
+    ex.response_events.push(d.event);
+    for (const p of d.patches || []) applyPatch(ex.assembled, p);
+    if (d.ttft_ms != null) ex.timing.ttft_ms = d.ttft_ms;
+  } else if (name === "exchange_done") {
+    finishFields(ex, d);
+  } else if (name === "exchange_error") {
+    ex.error = d.message;
+    if (d.ended_at) finishFields(ex, {...d, error: d.message});
+  }
+  markDirty(d.id);
+  if (d.ended_at && route.id === d.id && (route.view === "tab" || route.view === "message") && route.tab !== "request" && route.tab !== "diff") {
+    needsDetail = true;
+  }
+}
+function paintToolsUsage() {
+  const old = $("p-usage");
+  if (!old) return;
+  // Only the table changes; pair rows update themselves, and new calls join the list.
+  const fresh = toolsView(route.name);
+  const scroll = $("content").scrollTop;
+  $("content").replaceChildren(fresh);
+  $("content").scrollTop = scroll;
+}
+
+// Coalesced painting keeps a fast stream from redrawing for every event.
+const dirty = new Set();
+let timer = null, needsDetail = false;
+function markDirty(id) {
+  if (id != null) dirty.add(id);
+  if (timer == null) timer = setTimeout(flush, 50);
+}
+function flush() {
+  timer = null;
+  for (const id of dirty) {
+    const ex = exchanges.get(id);
+    if (!ex) continue;
+    paintRow(ex);
+    if (id === selectedId) {
+      paintStrip();
+      if (replyView && replyView.id === id) updateReply(ex);
+    }
+  }
+  dirty.clear();
+  paintSummary();
+  if (route.view === "tab" && route.tab === "raw" && needsDetail) paintDetail();
+  if (route.view === "stats") paintDetail();
+  needsDetail = false;
+}
+
+function receive(name, d) {
+  if (paused) {
+    if (name === "snapshot") held = [];      // a snapshot replaces everything before it
+    held.push([name, d]);
+    $("pause").textContent = `Resume (${held.length} held)`;
+    return;
+  }
+  applyEvent(name, d);
+}
+function connect() {
+  const source = new EventSource("/events");
+  source.onopen = () => { $("conn").textContent = "live"; $("conn").classList.add("live"); };
+  source.onerror = () => {
+    $("conn").textContent = "reconnecting"; $("conn").classList.remove("live");
+    if (source.readyState === EventSource.CLOSED) { source.close(); setTimeout(connect, 1500); }
+  };
+  for (const name of ["snapshot", "tool_index", "exchange_started", "exchange_response", "exchange_delta",
+                      "exchange_done", "exchange_error", "tool_paired", "tool_update", "exchange_evicted"]) {
+    source.addEventListener(name, e => {
+      let data;
+      try { data = JSON.parse(e.data); } catch (_) { return; }
+      receive(name, data);
+    });
+  }
+}
+
+// ------------------------------------------------------------------- controls
+function togglePause() {
+  paused = !paused;
+  $("pause").classList.toggle("on", paused);
+  $("pause").textContent = paused ? "Resume (0 held)" : "Pause";
+  if (!paused) { const list = held; held = []; for (const [n, d] of list) applyEvent(n, d); }
+}
+$("pause").onclick = togglePause;
+$("clear").onclick = () => {
+  held = [];
+  if (paused) $("pause").textContent = "Resume (0 held)";
+  applyEvent("snapshot", []); applyEvent("tool_index", {});
+  fetch("/api/clear", {method: "POST"}).catch(() => {});
+};
+$("export").onclick = () => { const a = h("a", {href: "/api/export", download: ""}); document.body.append(a); a.click(); a.remove(); };
+$("toolsbtn").onclick = () => { location.hash = "#/tools"; };
+let filterTimer = null;
+$("filter").addEventListener("input", e => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => { filterText = e.target.value.trim().toLowerCase(); applyFilter(); }, 120);
+});
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("theme", theme); } catch (_) {}
+}
+$("theme").onclick = () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+(() => {
+  let saved = null;
+  try { saved = localStorage.getItem("theme"); } catch (_) {}
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+})();
+function moveSelection(step) {
+  const visible = [...$("list").children].filter(r => r.style.display !== "none");
+  if (!visible.length) return;
+  const at = visible.findIndex(r => Number(r.dataset.id) === selectedId);
+  const next = visible[Math.max(0, Math.min(visible.length - 1, at + step))];
+  if (at < 0) location.hash = `#/exchange/${visible[0].dataset.id}/${currentTab()}`;
+  else location.hash = `#/exchange/${next.dataset.id}/${currentTab()}`;
+}
+document.addEventListener("keydown", e => {
+  if (!(e.target instanceof Element) || e.target.matches("input, textarea") || e.metaKey || e.ctrlKey || e.altKey) {
+    if (e.key === "Escape" && e.target.id === "filter") e.target.blur();
+    return;
+  }
+  if (e.key === "Enter" && e.target.classList && e.target.classList.contains("row")) { e.target.click(); return; }
+  if (e.key === "j" || e.key === "ArrowDown") { moveSelection(1); e.preventDefault(); }
+  else if (e.key === "k" || e.key === "ArrowUp") { moveSelection(-1); e.preventDefault(); }
+  else if (e.key === "/") { $("filter").focus(); e.preventDefault(); }
+  else if (e.key === "p") togglePause();
+  else if (e.key === "Escape" && route.view === "message") location.hash = `#/exchange/${route.id}/request`;
+  else if ("12345".includes(e.key) && e.key.length === 1) {
+    const key = TABS[Number(e.key) - 1][0];
+    if (key === "tools") location.hash = "#/tools";
+    else if (selectedId != null) location.hash = `#/exchange/${selectedId}/${key}`;
+  }
+});
+window.addEventListener("hashchange", onRoute);
+setInterval(() => {
+  for (const ex of exchanges.values()) if (isStreaming(ex)) markDirty(ex.id);
+}, 500);
+onRoute();
+paintSummary();
+connect();
+</script>
+</body>
+</html>

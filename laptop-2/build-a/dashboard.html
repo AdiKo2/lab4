@@ -1,0 +1,1059 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Traffic</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7; --surface: #ffffff; --surface-2: #eef0f3; --line: #d8dce2; --text: #1c2128; --muted: #5d6673;
+  --accent: #2f6fde; --ok: #1a7f4b; --warn: #a15c00; --err: #c62a2f; --err-bg: #fdecec;
+  --system: #7a4fd0; --tools: #0b7f8c; --conv: #4a6a94; --new: #c2651a; --reply: #17885c; --params: #6b7280;
+  --user-bg: #eef4ff; --asst-bg: #f0f8f3;
+  --j-key: #7a2fb0; --j-str: #0f7a45; --j-num: #1259c3; --j-bool: #b4470c; --j-null: #8a8f98;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #12151a; --surface: #1a1e25; --surface-2: #242932; --line: #333a45; --text: #e4e7ec; --muted: #9aa3af;
+  --accent: #6ea2f7; --ok: #4cc38a; --warn: #e0a24a; --err: #f2777b; --err-bg: #3a1d20;
+  --system: #a98bec; --tools: #4cc0cc; --conv: #8aa8cf; --new: #eb9a57; --reply: #4cc38a; --params: #9aa3af;
+  --user-bg: #1b2636; --asst-bg: #182a22;
+  --j-key: #c792ea; --j-str: #7fd3a3; --j-num: #82b1ff; --j-bool: #f0a36b; --j-null: #8a919c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #12151a; --surface: #1a1e25; --surface-2: #242932; --line: #333a45; --text: #e4e7ec; --muted: #9aa3af;
+    --accent: #6ea2f7; --ok: #4cc38a; --warn: #e0a24a; --err: #f2777b; --err-bg: #3a1d20;
+    --system: #a98bec; --tools: #4cc0cc; --conv: #8aa8cf; --new: #eb9a57; --reply: #4cc38a; --params: #9aa3af;
+    --user-bg: #1b2636; --asst-bg: #182a22;
+    --j-key: #c792ea; --j-str: #7fd3a3; --j-num: #82b1ff; --j-bool: #f0a36b; --j-null: #8a919c;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 2px 9px; }
+button:hover { border-color: var(--accent); }
+a { color: var(--accent); }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+
+#top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+#top h1 { font-size: 15px; margin: 0 6px 0 0; }
+#conn { font-size: 12px; font-weight: 600; padding: 1px 9px; border-radius: 10px; border: 1px solid currentColor; }
+#conn.live { color: var(--ok); } #conn.reconnecting { color: var(--warn); }
+#filter { flex: 1 1 200px; min-width: 140px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); }
+#export { text-decoration: none; color: inherit; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 2px 9px; }
+#export:hover { border-color: var(--accent); }
+#warn { padding: 3px 12px; font-size: 12px; background: var(--err-bg); color: var(--err); border-bottom: 1px solid var(--line); }
+#summary { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.stat { text-align: left; padding: 2px 9px; line-height: 1.25; background: var(--bg); }
+.stat small { display: block; color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; }
+.stat b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+main { flex: 1; min-height: 0; display: flex; }
+#list { width: 420px; flex: none; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); }
+#list-empty { padding: 18px 14px; color: var(--muted); }
+.row { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 6px 10px; background: transparent; border-left: 3px solid transparent; }
+.row:hover { background: var(--surface-2); border-color: var(--line); border-left-color: var(--accent); }
+.row.sel { background: var(--surface-2); border-left-color: var(--accent); }
+.row.hide { display: none; }
+.row div { display: flex; flex-wrap: wrap; gap: 0 9px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.row .l1 { font-size: 13px; }
+.row .l2, .row .l3 { color: var(--muted); }
+.row .id { font-weight: 700; } .row .model { flex: 1; min-width: 60px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.st-ok { color: var(--ok); font-weight: 600; } .st-bad { color: var(--err); font-weight: 600; }
+.spin { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#detail-head { background: var(--surface); border-bottom: 1px solid var(--line); }
+#strip { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 12px 2px; }
+#strip:empty { display: none; }
+#tabs { display: flex; flex-wrap: wrap; gap: 3px; padding: 5px 12px 0; }
+.tab { border-bottom: 0; border-radius: 6px 6px 0 0; padding: 4px 13px; border-color: transparent; background: transparent; color: var(--muted); }
+.tab.on { background: var(--bg); color: var(--text); border-color: var(--line); font-weight: 600; }
+.tab[data-tab="reply"] { color: var(--reply); }
+.tab[data-tab="reply"].on { border-top: 3px solid var(--reply); }
+#body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 40px; overflow-wrap: anywhere; }
+.hint { padding: 30px 12px; color: var(--muted); }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 0; }
+.bar .grow { flex: 1; }
+#index { position: sticky; top: 0; z-index: 6; background: var(--bg); height: 38px; flex-wrap: nowrap; overflow-x: auto; }
+.jump { white-space: nowrap; border-left-width: 3px; }
+.small { font-size: 11.5px; padding: 0 7px; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line)); border-radius: 6px; margin-bottom: 18px; scroll-margin-top: 42px; }
+.panel-head { position: sticky; top: 38px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 10px; background: var(--surface-2); border-bottom: 1px solid var(--line); border-radius: 0 5px 0 0; }
+.no-index .panel-head { top: 0; }
+.panel-head .title { font-weight: 700; color: var(--c, var(--text)); flex: 1; min-width: 150px; }
+.panel-body { padding: 9px 10px; }
+.p-system { --c: var(--system); } .p-tools { --c: var(--tools); } .p-conv { --c: var(--conv); }
+.p-new { --c: var(--new); } .p-reply { --c: var(--reply); } .p-params { --c: var(--params); }
+.p-new > .panel-body { background: color-mix(in srgb, var(--new) 8%, transparent); }
+
+.card { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 9px; background: var(--surface); }
+.card > .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 8px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.card > .head .who { font-weight: 700; flex: 1; }
+.card > .content { padding: 7px 8px; }
+.card.user { margin-right: 36px; } .card.user > .head { background: var(--user-bg); }
+.card.assistant { margin-left: 36px; } .card.assistant > .head { background: var(--asst-bg); }
+
+.block { margin-bottom: 7px; padding-left: 7px; border-left: 3px solid var(--line); }
+.block:last-child { margin-bottom: 0; }
+.block-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; margin-bottom: 2px; }
+.badge { font: 600 10.5px/1.5 var(--mono); padding: 0 6px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line); }
+.b-text { border-left-color: var(--line); }
+.b-tool_use { border-left-color: var(--accent); } .badge.tool_use { color: var(--accent); border-color: currentColor; }
+.b-tool_result { border-left-color: var(--tools); } .badge.tool_result { color: var(--tools); border-color: currentColor; }
+.b-thinking { border-left-color: var(--system); } .badge.thinking { color: var(--system); border-color: currentColor; }
+.badge.cache { color: var(--warn); border-color: currentColor; }
+.badge.err { color: #fff; background: var(--err); border-color: var(--err); }
+.badge.pending { color: var(--warn); border-color: currentColor; }
+.badge.paired { color: var(--ok); border-color: currentColor; }
+.badge.no_result { color: var(--muted); border-color: currentColor; }
+
+.lt-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lt.collapsed .lt-body { max-height: calc(6 * 1.45em); overflow: hidden; -webkit-mask-image: linear-gradient(#000 55%, transparent); mask-image: linear-gradient(#000 55%, transparent); }
+.lt-toggle { margin-top: 3px; font-size: 11.5px; padding: 0 7px; font-family: var(--sans); }
+.mono .lt-toggle { font-family: var(--sans); }
+
+.json { font: 12.5px/1.45 var(--mono); position: relative; }
+.json-copy { float: right; position: relative; z-index: 1; }
+.jc { margin-left: 2ch; }
+.caret { border: 0; background: none; padding: 0; width: 2ch; margin-left: -2ch; color: var(--muted); font: inherit; }
+.jl { padding-left: 2ch; }
+.j-key { color: var(--j-key); } .j-str { color: var(--j-str); } .j-num { color: var(--j-num); }
+.j-bool { color: var(--j-bool); } .j-null { color: var(--j-null); font-style: italic; }
+.j-sum { color: var(--muted); cursor: pointer; }
+.j-str .lt-body { display: block; }
+.fmt { font-size: 10.5px; padding: 0 5px; margin-left: 5px; font-family: var(--sans); }
+
+.fold-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; cursor: pointer; font-size: 12.5px; background: none; border: 0; padding: 0; text-align: left; }
+.fold-body { margin-top: 3px; }
+.tool-def { border-bottom: 1px solid var(--line); padding: 6px 0; }
+.tool-def:last-child { border-bottom: 0; }
+.tool-name { font: 700 13px var(--mono); }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 5px 0 9px; }
+.pair-label { grid-column: 1 / -1; font-size: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.side { border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; min-width: 0; cursor: pointer; }
+.side:hover { border-color: var(--accent); }
+.side.call { border-top: 3px solid var(--accent); } .side.result { border-top: 3px solid var(--tools); }
+.side.result.iserr { border-top-color: var(--err); background: var(--err-bg); }
+.side h4 { margin: 0 0 3px; font-size: 12px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.link { cursor: pointer; } tr.link:hover td { background: var(--surface-2); }
+.errbox { background: var(--err-bg); color: var(--err); padding: 6px 10px; border-radius: 5px; margin: 8px 0; }
+.note { background: var(--surface-2); padding: 6px 10px; border-radius: 5px; margin: 8px 0; font-size: 13px; }
+
+@media (max-width: 860px) {
+  main { flex-direction: column; overflow-y: auto; }
+  #list { width: 100%; max-height: 38vh; flex: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  #detail { flex: none; min-height: 70vh; }
+  .pair { grid-template-columns: 1fr; }
+  .card.user { margin-right: 0; } .card.assistant { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header id="top">
+  <h1>Agent Traffic</h1>
+  <span id="conn" class="reconnecting">reconnecting…</span>
+  <button id="pause" title="While paused, new events are buffered and not shown">Pause</button>
+  <button id="clear">Clear</button>
+  <a id="export" href="/api/export" download>Export</a>
+  <input id="filter" type="search" placeholder="Filter by path, model or text ( / )" aria-label="Filter exchanges">
+  <button id="theme" title="Switch between light and dark">Theme</button>
+</header>
+<div id="warn">Conversation contents are shown in full. Be careful when sharing screenshots or exports.</div>
+<section id="summary" aria-label="Session summary"></section>
+<main>
+  <nav id="list" aria-label="Exchanges"><div id="list-empty">Waiting for traffic. Run your agent through the proxy.</div></nav>
+  <section id="detail">
+    <div id="detail-head"><div id="strip"></div><div id="tabs"></div></div>
+    <div id="body"></div>
+  </section>
+</main>
+<script>
+"use strict";
+/* All model output and tool results reach the page through text nodes only: el() below
+   never sets markup, and this file does not use innerHTML. */
+
+// ------------------------------------------------------------------ helpers
+const $ = id => document.getElementById(id);
+function el(tag, props, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(kid instanceof Node ? kid : String(kid));
+  }
+  return node;
+}
+const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+const num = n => (n === null || n === undefined) ? "—" : Number(n).toLocaleString("en-US");
+const k1 = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
+const ms = v => v === null || v === undefined ? "—" : v >= 1000 ? (v / 1000).toFixed(2) + "s" : Math.round(v) + "ms";
+const usd = v => v === null || v === undefined ? "—" : "$" + (v < 1 ? v.toFixed(4) : v.toFixed(2));
+const pct = v => v === null || v === undefined ? "—" : Math.round(v * 100) + "%";
+const clock = iso => iso ? new Date(iso).toLocaleTimeString("en-GB") : "—";
+const approxTokens = chars => { const t = Math.round(chars / 4); return "~" + (t >= 1000 ? Math.round(t / 1000) + "k" : t); };
+
+function usageOf(x) {
+  const u = (x.assembled && x.assembled.usage) || {};
+  return { input: u.input_tokens || 0, output: u.output_tokens || 0,
+           read: u.cache_read_input_tokens || 0, write: u.cache_creation_input_tokens || 0 };
+}
+const hasUsage = x => { const u = usageOf(x); return u.input + u.output + u.read + u.write > 0; };
+function hitRatio(u) { const d = u.input + u.read + u.write; return d ? u.read / d : null; }
+function tokensPerSec(x) {
+  const t = x.timing || {}, out = usageOf(x).output;
+  if (!t.total_ms || !out) return null;
+  const span = t.ttft_ms !== null && t.ttft_ms !== undefined && t.total_ms > t.ttft_ms ? t.total_ms - t.ttft_ms : t.total_ms;
+  return out / (span / 1000);
+}
+const modelOf = x => (x.assembled && x.assembled.model) || (isObj(x.request_body) && x.request_body.model) || "";
+const source = x => x.view || (isObj(x.request_body) ? x.request_body : {});
+const messagesOf = x => { const m = source(x).messages; return Array.isArray(m) ? m : []; };
+const rawMessage = (x, i) => x.view ? x.view.raw_messages[i] : messagesOf(x)[i];
+const blocksOf = m => Array.isArray(m && m.content) ? m.content
+  : typeof (m && m.content) === "string" ? [{ type: "text", text: m.content }] : [];
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall through */ }
+  const area = el("textarea", { style: "position:fixed;opacity:0" });
+  area.value = text; document.body.append(area); area.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) { /* nothing more to try */ }
+  area.remove(); return ok;
+}
+function copyButton(getText, label) {
+  const name = label || "Copy";
+  const b = el("button", { class: "small copy", onclick: async ev => {
+    ev.stopPropagation();
+    b.textContent = await copyText(getText()) ? "Copied" : "Copy failed";
+    setTimeout(() => { b.textContent = name; }, 1200);
+  } }, name);
+  return b;
+}
+
+// ------------------------------------------------------------------ state
+const S = {
+  ex: new Map(), tools: new Map(), rows: new Map(),
+  paused: false, pending: [], resyncOnResume: false, synced: false,
+  filter: "", lastEx: null, lastTab: "request",
+  explicit: new Map(), overrides: new Map(), formatted: new Set(), scrollKey: null,
+};
+const dirty = { rows: new Set(), detail: false, summary: false, timer: null };
+
+// Open/closed state lives here, keyed by a path such as x13/request/system/0, so it
+// survives re-renders and switching exchanges. Expand/Collapse all set an override on
+// a path prefix, which also covers JSON nodes that have not been rendered yet.
+function isOpen(key, fallback) {
+  if (S.explicit.has(key)) return S.explicit.get(key);
+  for (let p = key; p; p = p.slice(0, Math.max(p.lastIndexOf("/"), 0))) {
+    if (S.overrides.has(p)) return S.overrides.get(p);
+  }
+  return fallback;
+}
+function setAll(scope, open) {
+  const under = k => k === scope || k.startsWith(scope + "/");
+  for (const k of [...S.explicit.keys()]) if (under(k)) S.explicit.delete(k);
+  for (const k of [...S.overrides.keys()]) if (under(k)) S.overrides.delete(k);
+  S.overrides.set(scope, open);
+  renderDetail();
+}
+const allButtons = scope => [
+  el("button", { class: "small", onclick: () => setAll(scope, true) }, "Expand all"),
+  el("button", { class: "small", onclick: () => setAll(scope, false) }, "Collapse all"),
+];
+
+// ------------------------------------------------------------------ long text (§6.10.1)
+function isLong(text) {
+  if (text.length > 1000) return true;
+  let lines = 1;
+  for (let i = 0; i < text.length; i++) if (text[i] === "\n" && ++lines > 12) return true;
+  return false;
+}
+// Enough to fill six wrapped lines at any width; the rest is added when opened.
+const PREVIEW_CHARS = 6000;
+function longText(text, key, opts) {
+  opts = opts || {};
+  const cls = "lt" + (opts.mono ? " mono" : "") + (opts.cls ? " " + opts.cls : "");
+  if (!isLong(text)) return el("div", { class: cls }, el("div", { class: "lt-body" }, text));
+  // A block that is still streaming stays open so the text can be watched arriving.
+  const open = isOpen(key, !!opts.streaming);
+  const node = el("div", { class: cls + (open ? "" : " collapsed") },
+    el("div", { class: "lt-body" }, open ? text : text.slice(0, PREVIEW_CHARS)),
+    el("button", { class: "lt-toggle", onclick: ev => {
+      ev.stopPropagation();
+      S.explicit.set(key, !open);
+      node.replaceWith(longText(text, key, opts));
+    } }, open ? "Collapse" : `Show all (${num(text.split("\n").length)} lines, ${k1(text.length)} chars)`));
+  return node;
+}
+function fold(key, fallback, head, body) {
+  const open = isOpen(key, fallback);
+  const node = el("div", { class: "fold" },
+    el("button", { class: "fold-head", "aria-expanded": String(open), onclick: ev => {
+      ev.stopPropagation();
+      S.explicit.set(key, !open);
+      node.replaceWith(fold(key, fallback, head, body));
+    } }, el("span", { class: "muted" }, open ? "▾" : "▸"), head),
+    open && el("div", { class: "fold-body" }, body()));
+  return node;
+}
+
+// ------------------------------------------------------------------ JSON (§6.10.2)
+function parsedJson(text) {
+  const t = text.trim();
+  if (t[0] !== "{" && t[0] !== "[") return undefined;
+  try { const v = JSON.parse(t); return typeof v === "object" && v !== null ? v : undefined; } catch (e) { return undefined; }
+}
+function formatToggle(key, rerender) {
+  const on = S.formatted.has(key);
+  return el("button", { class: "fmt", onclick: ev => {
+    ev.stopPropagation();
+    if (on) S.formatted.delete(key); else S.formatted.add(key);
+    rerender();
+  } }, on ? "raw" : "format");
+}
+// A text value that may itself be JSON. Tool results are often like this.
+function maybeJsonText(text, key, opts) {
+  const parsed = parsedJson(text);
+  if (parsed === undefined) return longText(text, key, opts);
+  const fmtKey = key + "/fmt";
+  const node = el("div", {},
+    formatToggle(fmtKey, () => node.replaceWith(maybeJsonText(text, key, opts))),
+    S.formatted.has(fmtKey) ? jsonBlock(parsed, fmtKey) : longText(text, key, opts));
+  return node;
+}
+function jsonPrimitive(v, key) {
+  if (typeof v === "string") {
+    const quoted = JSON.stringify(v);
+    const parsed = parsedJson(v);
+    const fmtKey = key + "/fmt";
+    const node = el("span", { class: "j-str" });
+    const draw = () => {
+      node.replaceChildren();
+      if (parsed !== undefined && S.formatted.has(fmtKey)) node.append(jsonBlock(parsed, fmtKey));
+      else if (isLong(v)) node.append(longText(v, key, { mono: true }));
+      else node.append(quoted);
+      if (parsed !== undefined) node.append(formatToggle(fmtKey, draw));
+    };
+    draw();
+    return node;
+  }
+  if (typeof v === "number") return el("span", { class: "j-num" }, String(v));
+  if (typeof v === "boolean") return el("span", { class: "j-bool" }, String(v));
+  if (v === null) return el("span", { class: "j-null" }, "null");
+  return el("span", {}, String(v));
+}
+function jsonNode(value, key, depth, label, comma) {
+  const labelNode = label === undefined ? null : [el("span", { class: "j-key" }, JSON.stringify(label)), ": "];
+  const tail = comma ? "," : "";
+  if (typeof value !== "object" || value === null) {
+    return el("div", { class: "jl" }, labelNode, jsonPrimitive(value, key), tail);
+  }
+  const array = Array.isArray(value);
+  const keys = array ? value.map((_, i) => i) : Object.keys(value);
+  const [opener, closer] = array ? ["[", "]"] : ["{", "}"];
+  if (!keys.length) return el("div", { class: "jl" }, labelNode, opener + closer + tail);
+  const open = isOpen(key, depth <= 2);  // the root is depth 0, so depth 3 and below start folded
+  const toggle = ev => {
+    ev.stopPropagation();
+    S.explicit.set(key, !open);
+    node.replaceWith(jsonNode(value, key, depth, label, comma));
+  };
+  const caret = el("button", { class: "caret", "aria-label": open ? "Fold" : "Unfold", onclick: toggle }, open ? "▾" : "▸");
+  if (!open) {
+    const n = keys.length;
+    const summary = array ? `[…] ${n} item${n === 1 ? "" : "s"}` : `{…} ${n} key${n === 1 ? "" : "s"}`;
+    var node = el("div", { class: "jl" }, caret, labelNode, el("span", { class: "j-sum", onclick: toggle }, summary), tail);
+    return node;
+  }
+  node = el("div", { class: "jl" }, caret, labelNode, opener,
+    el("div", {}, keys.map((k, i) => jsonNode(value[k], key + "/" + encodeURIComponent(k), depth + 1,
+      array ? undefined : k, i < keys.length - 1))),
+    closer + tail);
+  return node;
+}
+function jsonBlock(value, key) {
+  return el("div", { class: "json" },
+    el("span", { class: "json-copy" }, copyButton(() => JSON.stringify(value))),
+    jsonNode(value, key, 0));
+}
+
+// ------------------------------------------------------------------ panels and blocks
+function panel(cls, id, title, scope, body, extra) {
+  return el("section", { class: "panel " + cls, id: id || null },
+    el("div", { class: "panel-head" }, el("span", { class: "title" }, title), extra, allButtons(scope)),
+    el("div", { class: "panel-body" }, body));
+}
+const cacheFlag = b => isObj(b) && b.cache_control
+  ? el("span", { class: "badge cache", title: JSON.stringify(b.cache_control) },
+       "cache_control" + (b.cache_control.ttl ? " " + b.cache_control.ttl : "")) : null;
+const badge = (type) => el("span", { class: "badge " + type }, type);
+const hrefEx = (id, tab) => `#/exchange/${id}/${tab}`;
+const go = hash => { location.hash = hash; };
+
+function resultContent(content, key) {
+  if (content === null || content === undefined) return el("span", { class: "muted" }, "(empty)");
+  if (typeof content === "string") return maybeJsonText(content, key, { mono: true });
+  if (Array.isArray(content)) return content.map((b, i) => renderBlock(b, key + "/" + i, {}));
+  return jsonBlock(content, key);
+}
+function renderBlock(b, key, opts) {
+  opts = opts || {};
+  if (!isObj(b)) return el("div", { class: "block" }, jsonBlock(b, key));
+  const type = b.type || "unknown";
+  const head = (...more) => el("div", { class: "block-head" }, badge(type), cacheFlag(b), more);
+  if (type === "text") {
+    return el("div", { class: "block b-text" }, head(el("span", { class: "muted" }, num((b.text || "").length) + " chars")),
+      longText(b.text || "", key, { streaming: opts.streaming }));
+  }
+  if (type === "thinking" || type === "redacted_thinking") {
+    const text = b.thinking || "";
+    return el("div", { class: "block b-thinking" },
+      fold(key, !!opts.detail, [badge(type), cacheFlag(b), el("span", { class: "muted" }, type === "thinking" ? num(text.length) + " chars" : "encrypted")],
+        () => type === "thinking"
+          ? el("div", { class: "lt-body" }, text || "(the API returned no thinking text)")
+          : jsonBlock(b, key + "/raw")));
+  }
+  if (type === "tool_use") {
+    return el("div", { class: "block b-tool_use" },
+      head(el("b", { class: "mono" }, b.name), el("span", { class: "mono muted" }, b.id)), toolInput(b, key));
+  }
+  if (type === "tool_result") {
+    return el("div", { class: "block b-tool_result" },
+      head(el("span", { class: "mono muted" }, "tool_use_id " + b.tool_use_id),
+        b.is_error ? el("span", { class: "badge err" }, "is_error") : el("span", { class: "muted" }, "is_error: false")),
+      resultContent(b.content, key));
+  }
+  if ((type === "image" || type === "document") && isObj(b.source)) {
+    const s = b.source;
+    const size = s.data ? `${k1(Math.round(s.data.length * 3 / 4))} bytes` : (s.url || s.file_id || "");
+    return el("div", { class: "block" }, head(el("span", { class: "mono" }, s.media_type || s.type), el("span", { class: "muted" }, size)));
+  }
+  return el("div", { class: "block" }, head(), jsonBlock(b, key));
+}
+function toolInput(b, key) {
+  if ("partial_json" in b) return el("div", { class: "muted" }, `receiving input… ${num(b.partial_json.length)} chars so far`);
+  return el("div", {}, b.input_raw !== undefined
+    ? [el("div", { class: "errbox" }, "Input was cut off before it was valid JSON."), longText(b.input_raw, key + "/raw", { mono: true })]
+    : jsonBlock(b.input === undefined ? null : b.input, key + "/input"));
+}
+const STATUS_LABEL = { pending: "pending", paired: "paired", no_result: "no result" };
+const statusBadge = status => el("span", { class: "badge " + status }, STATUS_LABEL[status] || status);
+
+// One tool call beside its result (§6.4).
+function pairRow(toolId, entry, key, callBlock) {
+  const status = entry ? entry.status : "pending";
+  const callEx = entry ? entry.call_exchange : null, resultEx = entry ? entry.result_exchange : null;
+  const name = entry ? entry.name : callBlock && callBlock.name;
+  const jump = target => ev => {
+    if (ev.target.closest("button, a") || String(getSelection())) return;
+    if (target) go(target);
+  };
+  const callHref = callEx !== null ? hrefEx(callEx, "reply") : null;
+  const resHref = resultEx !== null ? hrefEx(resultEx, "request") : null;
+  const failed = entry && entry.is_error;
+  return el("div", { class: "pair" },
+    el("div", { class: "pair-label" },
+      callEx !== null ? el("a", { href: callHref }, `reply #${callEx}`) : el("span", { class: "muted" }, "call not captured"),
+      "→",
+      resultEx !== null ? el("a", { href: resHref }, `request #${resultEx}`) : el("span", { class: "muted" }, "no request yet"),
+      statusBadge(status),
+      el("span", { class: "mono muted" }, toolId)),
+    el("div", { class: "side call", onclick: jump(callHref) },
+      el("h4", {}, badge("tool_use"), el("b", { class: "mono" }, name),
+        callEx !== null && el("a", { href: `#/exchange/${callEx}/message/reply` }, "open message")),
+      callBlock ? toolInput(callBlock, key + "/call") : entry ? jsonBlock(entry.input, key + "/call") : null),
+    el("div", { class: "side result" + (failed ? " iserr" : ""), onclick: jump(resHref) },
+      el("h4", {}, badge("tool_result"),
+        failed && el("span", { class: "badge err", title: "is_error: true" }, "error"),
+        entry && entry.result_size !== null && entry.result_size !== undefined && el("span", { class: "muted" }, k1(entry.result_size) + " chars"),
+        resultEx !== null && entry.result_message_index !== null && el("a", { href: `#/exchange/${resultEx}/message/${entry.result_message_index}` }, "open message")),
+      status === "paired" ? resultContent(entry.result, key + "/result")
+        : el("div", { class: "muted" }, status === "no_result" ? "No result: the conversation moved on without one." : "Pending: waiting for the next request to bring the result.")));
+}
+
+function messageCard(x, m, i, keyBase, opts) {
+  opts = opts || {};
+  const role = isObj(m) ? m.role : "?";
+  const blocks = blocksOf(m), key = keyBase + "/" + i;
+  return el("div", { class: "card " + role, id: `m-${x.id}-${i}` },
+    el("div", { class: "head" }, el("span", { class: "who" }, `${role} #${i}`),
+      el("span", { class: "muted" }, blocks.length + (blocks.length === 1 ? " block" : " blocks")),
+      el("a", { href: `#/exchange/${x.id}/message/${i}` }, "open")),
+    el("div", { class: "content" }, blocks.map((b, j) => {
+      const bKey = key + "/" + j;
+      if (opts.pairs && isObj(b) && b.type === "tool_result") return resultBeside(x, b, bKey);
+      return renderBlock(b, bKey, {});
+    })));
+}
+function resultBeside(x, b, key) {
+  const entry = S.tools.get(b.tool_use_id);
+  if (entry) return pairRow(b.tool_use_id, entry, key);
+  // The call came before this session, or has left the buffer: show it from this request.
+  let call = null;
+  for (const m of messagesOf(x)) for (const c of blocksOf(m)) if (c.type === "tool_use" && c.id === b.tool_use_id) call = c;
+  return el("div", {},
+    call && el("div", { class: "note" }, `Call ${call.name} (${b.tool_use_id}) was not captured in this session; its input, from this request's history:`),
+    call && jsonBlock(call.input, key + "/call"),
+    renderBlock(b, key, {}));
+}
+
+// ------------------------------------------------------------------ request tab (§6.2)
+function renderRequest(x) {
+  const base = `x${x.id}/request`, src = source(x), sys = src.system;
+  const blocks = typeof sys === "string" ? (sys ? [{ type: "text", text: sys }] : [])
+    : Array.isArray(sys) ? sys : [];
+  const sysChars = blocks.reduce((n, b) => n + (isObj(b) ? (b.text || "") : String(b)).length, 0);
+  const tools = Array.isArray(src.tools) ? src.tools : [];
+  const msgs = messagesOf(x), lastIdx = msgs.length - 1;
+  const jumpTo = (id, label, color) => el("button", { class: "jump small", style: `border-left-color:var(--${color})`,
+    onclick: () => $(id).scrollIntoView() }, label);
+  const hidden = new Set(x.view ? ["instructions", "tools", "input"] : ["system", "tools", "messages"]);
+  const params = isObj(x.request_body) ? Object.keys(x.request_body).filter(k => !hidden.has(k)) : [];
+  return [
+    el("div", { class: "bar", id: "index" },
+      jumpTo("p-system", "System", "system"), jumpTo("p-tools", "Tools", "tools"),
+      jumpTo("p-conv", "Conversation", "conv"), jumpTo("p-new", "New message", "new"),
+      el("span", { class: "grow" }), allButtons(base)),
+    typeof x.request_body === "string" && x.request_body
+      ? el("div", { class: "note" }, el("b", {}, "Body is not JSON:"), longText(x.request_body, base + "/body", { mono: true })) : null,
+    panel("p-system", "p-system",
+      `System instructions · ${blocks.length} block${blocks.length === 1 ? "" : "s"} · ${approxTokens(sysChars)} tokens`, base + "/system",
+      blocks.length ? blocks.map((b, i) => {
+        const text = isObj(b) ? (b.text || "") : String(b);
+        return el("div", { class: "block" },
+          el("div", { class: "block-head muted" }, `block ${i} · ${num(text.length)} chars · ${approxTokens(text.length)} tokens`, cacheFlag(b)),
+          longText(text, `${base}/system/${i}`));
+      }) : el("div", { class: "muted" }, "This request has no system instructions.")),
+    panel("p-tools", "p-tools", `Tools · ${tools.length}`, base + "/tools",
+      tools.length ? tools.map((t, i) => renderToolDef(t, `${base}/tools/${i}`)) : el("div", { class: "muted" }, "This request defines no tools.")),
+    panel("p-conv", "p-conv", `Conversation so far · ${Math.max(lastIdx, 0)} messages`, base + "/conv",
+      lastIdx > 0 ? msgs.slice(0, lastIdx).map((m, i) => messageCard(x, m, i, base + "/conv"))
+        : el("div", { class: "muted" }, "Nothing earlier: this is the first message.")),
+    panel("p-new", "p-new", "New message", base + "/new",
+      lastIdx >= 0 ? messageCard(x, msgs[lastIdx], lastIdx, base + "/new", { pairs: true })
+        : el("div", { class: "muted" }, "This request has no messages.")),
+    params.length ? panel("p-params", null, `Other parameters · ${params.length}`, base + "/params",
+      el("table", {}, params.map(k => {
+        const v = x.request_body[k];
+        return el("tr", {}, el("th", { class: "mono" }, k),
+          el("td", {}, typeof v === "object" && v !== null ? jsonBlock(v, `${base}/params/${k}`) : jsonPrimitive(v, `${base}/params/${k}`)));
+      }))) : null,
+  ];
+}
+function renderToolDef(t, key) {
+  if (!isObj(t)) return jsonBlock(t, key);
+  const schema = t.input_schema !== undefined ? t.input_schema : t;
+  return el("div", { class: "tool-def" },
+    el("div", { class: "block-head" }, el("span", { class: "tool-name" }, t.name || t.type || "(unnamed)"), cacheFlag(t)),
+    t.description ? longText(t.description, key + "/desc") : null,
+    fold(key + "/schema", false, el("span", { class: "muted" }, "input schema"), () => jsonBlock(schema, key + "/schema")));
+}
+
+// ------------------------------------------------------------------ reply tab (§6.3)
+function renderReply(x) {
+  const base = `x${x.id}/reply`, a = x.assembled, content = a.content || [], streaming = !x.ended_at;
+  const u = usageOf(x);
+  const haveReply = content.length > 0;
+  return [
+    el("div", { class: "bar" },
+      streaming ? [el("span", { class: "spin" }), el("span", { class: "muted" }, "streaming…")] : null,
+      el("span", {}, "stop_reason ", el("b", { class: "mono" }, a.stop_reason || "—")),
+      el("span", {}, "model ", el("b", { class: "mono" }, modelOf(x) || "—")),
+      haveReply && el("a", { href: `#/exchange/${x.id}/message/reply` }, "open message"),
+      el("span", { class: "grow" }), allButtons(base)),
+    x.error ? el("div", { class: "errbox" }, x.error) : null,
+    panel("p-reply", null, `Reply · ${content.length} block${content.length === 1 ? "" : "s"}`, base + "/content",
+      haveReply ? content.map((b, i) => {
+        const key = `${base}/content/${i}`;
+        if (isObj(b) && b.type === "tool_use") {
+          return el("div", { class: "block b-tool_use" },
+            el("div", { class: "block-head" }, badge("tool_use"), el("b", { class: "mono" }, b.name),
+              el("span", { class: "mono muted" }, b.id), statusBadge((S.tools.get(b.id) || {}).status || "pending")),
+            pairRow(b.id, S.tools.get(b.id), key, b));
+        }
+        return renderBlock(b, key, { streaming });
+      }) : x.response_body !== null && x.response_body !== undefined
+        ? (typeof x.response_body === "string" ? longText(x.response_body, base + "/body", { mono: true }) : jsonBlock(x.response_body, base + "/body"))
+        : el("div", { class: "muted" }, streaming ? "Waiting for the first token…" : "This response had no body.")),
+    panel("p-reply", null, "Usage", base + "/usage",
+      hasUsage(x) ? el("table", {},
+        el("tr", {}, ["Input", "Output", "Cache read", "Cache write", "Cache hit"].map(h => el("th", { class: "num" }, h))),
+        el("tr", {}, [u.input, u.output, u.read, u.write].map(v => el("td", { class: "num" }, num(v))),
+          el("td", { class: "num" }, pct(hitRatio(u)))))
+      : el("div", { class: "muted" }, "No usage reported.")),
+  ];
+}
+
+// ------------------------------------------------------------------ diff tab (§6.7)
+function renderDiff(x) {
+  const base = `x${x.id}/diff`, msgs = messagesOf(x), c = x.conversation || {};
+  const prev = c.prev_exchange, from = prev ? c.new_from : 0, fresh = msgs.slice(from);
+  const explain = !msgs.length ? "This request has no messages to compare."
+    : prev ? `Compared with request #${prev}. ${from} earlier message${from === 1 ? " was" : "s were"} resent unchanged (cache_control and thinking blocks are ignored when comparing), so ${fresh.length} ${fresh.length === 1 ? "is" : "are"} new.`
+    : "No earlier request in the buffer has the same system prompt and a matching message prefix, so this starts a conversation and every message counts as new.";
+  return [
+    el("div", { class: "bar" }, el("span", { class: "grow" }), allButtons(base)),
+    el("div", { class: "note" }, explain, " ", prev ? el("a", { href: hrefEx(prev, "request") }, `Open request #${prev}`) : null),
+    panel("p-new", null, `New since the previous request · ${fresh.length}`, base + "/new",
+      fresh.length ? fresh.map((m, i) => messageCard(x, m, from + i, base + "/new"))
+        : el("div", { class: "muted" }, "No new messages: this request resends the previous one (a retry).")),
+  ];
+}
+
+// ------------------------------------------------------------------ raw tab (§6.8)
+function renderRaw(x) {
+  const base = `x${x.id}/raw`;
+  const rawSSE = () => x.response_events.map(e => e.raw).join("\n\n");
+  const rawPanel = (title, key, text, node) => panel("p-params", null, title, `${base}/${key}`, node, copyButton(() => text()));
+  const body = x.request_body, resp = x.response_body;
+  return [
+    el("div", { class: "bar" }, el("span", { class: "grow" }), allButtons(base)),
+    rawPanel("Request headers", "reqh", () => JSON.stringify(x.request_headers, null, 2), jsonBlock(x.request_headers, base + "/reqh/j")),
+    rawPanel("Request JSON", "body", () => typeof body === "string" ? body : JSON.stringify(body),
+      typeof body === "string" ? longText(body, base + "/body/t", { mono: true }) : jsonBlock(body, base + "/body/j")),
+    rawPanel("Response headers", "resh", () => JSON.stringify(x.response_headers, null, 2), jsonBlock(x.response_headers, base + "/resh/j")),
+    x.response_events.length
+      ? rawPanel(`Raw SSE · ${x.response_events.length} events`, "sse", rawSSE, longText(rawSSE(), base + "/sse/t", { mono: true }))
+      : rawPanel("Response body", "resp", () => typeof resp === "string" ? resp : JSON.stringify(resp),
+          typeof resp === "string" ? longText(resp, base + "/resp/t", { mono: true }) : jsonBlock(resp, base + "/resp/j")),
+  ];
+}
+
+// ------------------------------------------------------------------ message drill-down (§6.6)
+function renderMessage(x, which) {
+  const reply = which === "reply";
+  const msgs = messagesOf(x), i = Number(which);
+  const message = reply ? { role: "assistant", content: x.assembled.content } : msgs[i];
+  if (!message) return el("div", { class: "hint" }, `Exchange #${x.id} has no message ${which}.`);
+  const raw = reply ? { role: "assistant", ...x.assembled } : rawMessage(x, i);
+  const base = `x${x.id}/msg/${which}`, blocks = blocksOf(message);
+  return [
+    el("div", { class: "bar" },
+      el("a", { href: hrefEx(x.id, reply ? "reply" : "request") }, `← exchange #${x.id}`),
+      el("b", {}, reply ? "assistant · reply" : `${message.role} · position ${i} of ${msgs.length} in messages`),
+      !reply && i > 0 && el("a", { href: `#/exchange/${x.id}/message/${i - 1}` }, "previous"),
+      !reply && i < msgs.length - 1 && el("a", { href: `#/exchange/${x.id}/message/${i + 1}` }, "next"),
+      el("span", { class: "grow" }), allButtons(base)),
+    panel(reply ? "p-reply" : "p-conv", null, `Content blocks · ${blocks.length}`, base + "/blocks",
+      blocks.map((b, j) => {
+        const key = `${base}/blocks/${j}`;
+        const id = isObj(b) && (b.type === "tool_use" ? b.id : b.type === "tool_result" ? b.tool_use_id : null);
+        const entry = id ? S.tools.get(id) : null;
+        return el("div", {},
+          el("div", { class: "muted", style: "font-size:11.5px" }, `block ${j}`),
+          renderBlock(b, key, { detail: true, streaming: reply && !x.ended_at }),
+          entry && pairRow(id, entry, key + "/pair"));
+      })),
+    panel("p-params", null, "Raw JSON", base + "/raw", jsonBlock(raw, base + "/raw/j")),
+  ];
+}
+
+// ------------------------------------------------------------------ tools view (§6.4, §6.5)
+function toolStats() {
+  const by = new Map();
+  for (const e of S.tools.values()) {
+    const t = by.get(e.name) || { name: e.name, calls: 0, errors: 0, sizes: [], waits: [] };
+    t.calls++;
+    if (e.is_error) t.errors++;
+    if (e.result_size !== null && e.result_size !== undefined) t.sizes.push(e.result_size);
+    if (e.wait_ms !== null && e.wait_ms !== undefined) t.waits.push(e.wait_ms);
+    by.set(e.name, t);
+  }
+  return [...by.values()].sort((a, b) => b.calls - a.calls);
+}
+const avg = list => list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+function renderTools(name) {
+  const stats = toolStats();
+  const pairs = [...S.tools.entries()].filter(([, e]) => !name || e.name === name)
+    .sort((a, b) => b[1].call_exchange - a[1].call_exchange);
+  return [
+    el("div", { class: "bar" }, name ? el("a", { href: "#/tools" }, "← all tools") : null, el("span", { class: "grow" }), allButtons("tools")),
+    panel("p-tools", null, `Tool usage · ${stats.length} tool${stats.length === 1 ? "" : "s"}`, "tools/usage",
+      stats.length ? el("table", {},
+        el("tr", {}, el("th", {}, "Tool"), ["Calls", "Errors", "Avg result size", "Avg call → result"].map(h => el("th", { class: "num" }, h))),
+        stats.map(t => el("tr", { class: "link", tabindex: "0", onclick: () => go("#/tools/" + encodeURIComponent(t.name)) },
+          el("td", { class: "mono" }, t.name),
+          el("td", { class: "num" }, num(t.calls)), el("td", { class: "num" }, num(t.errors)),
+          el("td", { class: "num" }, t.sizes.length ? k1(Math.round(avg(t.sizes))) + " chars" : "—"),
+          el("td", { class: "num" }, ms(avg(t.waits))))))
+      : el("div", { class: "muted" }, "No tool calls yet.")),
+    panel("p-tools", null, `${name ? name + " calls" : "All calls"} · ${pairs.length}, newest first`, "tools/pairs",
+      pairs.length ? pairs.map(([id, e]) => pairRow(id, e, "tools/pairs/" + id))
+        : el("div", { class: "muted" }, "Nothing here yet.")),
+  ];
+}
+
+// ------------------------------------------------------------------ statistics (§6.5)
+const METRICS = {
+  requests: { label: "Requests", value: x => x.id, show: x => "#" + x.id },
+  input: { label: "Input tokens", value: x => usageOf(x).input, show: num },
+  output: { label: "Output tokens", value: x => usageOf(x).output, show: num },
+  read: { label: "Cache read", value: x => usageOf(x).read, show: num },
+  write: { label: "Cache write", value: x => usageOf(x).write, show: num },
+  cost: { label: "Cost", value: x => x.cost_usd, show: usd },
+  wall: { label: "Wall clock (each request's duration)", value: x => x.timing.total_ms, show: ms },
+  latency: { label: "Latency", value: x => x.timing.total_ms, show: ms },
+  cache: { label: "Cache hit", value: x => hitRatio(usageOf(x)), show: pct },
+};
+function sessionStats() {
+  const s = { requests: S.ex.size, input: 0, output: 0, read: 0, write: 0, cost: 0, priced: 0, unpriced: 0, totals: [], first: null, last: null };
+  for (const x of S.ex.values()) {
+    const u = usageOf(x);
+    s.input += u.input; s.output += u.output; s.read += u.read; s.write += u.write;
+    if (x.cost_usd !== null && x.cost_usd !== undefined) { s.cost += x.cost_usd; s.priced++; }
+    else if (x.ended_at && hasUsage(x)) s.unpriced++;
+    if (x.timing.total_ms !== null && x.timing.total_ms !== undefined) s.totals.push(x.timing.total_ms);
+    const start = Date.parse(x.started_at), end = x.ended_at ? Date.parse(x.ended_at) : start;
+    if (s.first === null || start < s.first) s.first = start;
+    if (s.last === null || end > s.last) s.last = end;
+  }
+  return s;
+}
+function renderSummary() {
+  const s = sessionStats();
+  const item = (metric, label, value) => el("button", { class: "stat", onclick: () => go("#/stats/" + metric), title: "Show the exchanges behind this number" },
+    el("small", {}, label), el("b", {}, value));
+  const costText = s.priced ? usd(s.cost) + (s.unpriced ? ` + ${s.unpriced} unpriced` : "") : "—";
+  $("summary").replaceChildren(
+    item("requests", "Requests", num(s.requests)),
+    item("input", "Input", num(s.input)), item("output", "Output", num(s.output)),
+    item("read", "Cache read", num(s.read)), item("write", "Cache write", num(s.write)),
+    item("cost", "Cost", costText),
+    item("wall", "Wall clock", s.first === null ? "—" : ms(s.last - s.first)),
+    item("latency", "Avg latency", ms(avg(s.totals))),
+    item("cache", "Cache hit", pct(hitRatio(s))));
+}
+function renderStats(metric) {
+  const m = METRICS[metric];
+  if (!m) return el("div", { class: "hint" }, "Unknown statistic.");
+  const list = [...S.ex.values()].filter(x => metric === "requests" || m.value(x) !== null && m.value(x) !== undefined);
+  list.sort((a, b) => (m.value(b) || 0) - (m.value(a) || 0));
+  return [
+    el("div", { class: "bar" }, el("b", {}, m.label + " by request")),
+    panel("p-params", null, `${list.length} exchanges`, "stats/" + metric,
+      el("table", {},
+        el("tr", {}, el("th", {}, "Exchange"), el("th", {}, "Time"), el("th", {}, "Model"), el("th", { class: "num" }, metric === "requests" ? "Duration" : m.label), el("th", {}, "Messages")),
+        list.map(x => el("tr", {},
+          el("td", {}, el("a", { href: hrefEx(x.id, "request") }, "#" + x.id)),
+          el("td", {}, clock(x.started_at)), el("td", { class: "mono" }, modelOf(x) || x.path),
+          el("td", { class: "num" }, metric === "requests" ? ms(x.timing.total_ms) : m.show(m.value(x))),
+          el("td", {},
+            messagesOf(x).length ? el("a", { href: `#/exchange/${x.id}/message/${messagesOf(x).length - 1}` }, "request") : null, " ",
+            (x.assembled.content || []).length ? el("a", { href: `#/exchange/${x.id}/message/reply` }, "reply") : null))))),
+  ];
+}
+
+// ------------------------------------------------------------------ list rows (§6.1)
+function buildRow(x) {
+  const f = {};
+  const span = (name, cls) => (f[name] = el("span", { class: cls || "" }));
+  const node = el("button", { class: "row", "data-id": x.id, onclick: () => go(hrefEx(x.id, S.lastTab)) },
+    el("div", { class: "l1" }, span("id", "id"), span("time", "muted"), span("model", "model mono"), span("status"), span("spin", "spin"), span("stop", "muted mono")),
+    el("div", { class: "l2" }, span("dur"), span("tokens"), span("cache"), span("hit"), span("cost")),
+    el("div", { class: "l3" }, span("ttfb"), span("ttft"), span("tps")));
+  S.rows.set(x.id, { node, f });
+  const list = $("list");
+  const after = [...list.querySelectorAll(".row")].find(r => Number(r.dataset.id) < x.id);
+  list.insertBefore(node, after || null);
+  $("list-empty").style.display = "none";
+  return S.rows.get(x.id);
+}
+function updateRow(x) {
+  const r = S.rows.get(x.id) || buildRow(x), f = r.f, u = usageOf(x), t = x.timing;
+  f.id.textContent = "#" + x.id;
+  f.time.textContent = clock(x.started_at);
+  f.model.textContent = modelOf(x) || `${x.method} ${x.path}`;
+  f.model.title = `${x.method} ${x.path}`;
+  f.status.textContent = x.status === null ? (x.error ? "ERR" : "…") : x.status;
+  f.status.className = x.error || x.status >= 400 ? "st-bad" : x.status ? "st-ok" : "muted";
+  f.spin.style.display = x.ended_at ? "none" : "";
+  f.stop.textContent = x.assembled.stop_reason || "";
+  f.dur.textContent = ms(t.total_ms);
+  f.tokens.textContent = `in ${num(u.input)} / out ${num(u.output)}`;
+  f.cache.textContent = `read ${num(u.read)} / write ${num(u.write)}`;
+  f.hit.textContent = "hit " + pct(hitRatio(u));
+  f.cost.textContent = usd(x.cost_usd);
+  f.ttfb.textContent = "ttfb " + ms(t.ttfb_ms);
+  f.ttft.textContent = "ttft " + ms(t.ttft_ms);
+  const tps = tokensPerSec(x);
+  f.tps.textContent = tps === null ? "— tok/s" : tps.toFixed(1) + " tok/s";
+  r.node.classList.toggle("hide", !matchesFilter(x));
+  r.node.classList.toggle("sel", route().id === x.id);
+}
+function matchesFilter(x) {
+  if (!S.filter) return true;
+  if (x._blob === undefined) {
+    x._blob = (x.path + " " + modelOf(x) + " " + JSON.stringify(source(x)) + " " + JSON.stringify(x.assembled.content)).toLowerCase();
+  }
+  return x._blob.includes(S.filter);
+}
+
+// ------------------------------------------------------------------ routes
+function route() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  if (parts[0] === "exchange" && /^\d+$/.test(parts[1] || "")) {
+    const id = Number(parts[1]);
+    if (parts[2] === "message" && parts[3]) return { view: "message", id, which: parts[3] };
+    return { view: "exchange", id, tab: ["request", "reply", "diff", "raw"].includes(parts[2]) ? parts[2] : "request" };
+  }
+  if (parts[0] === "tools") {
+    let name = null;
+    try { name = parts[1] ? decodeURIComponent(parts[1]) : null; } catch (e) { /* a broken link shows all tools */ }
+    return { view: "tools", name };
+  }
+  if (parts[0] === "stats") return { view: "stats", metric: parts[1] };
+  return { view: "home" };
+}
+const TABS = [["request", "Request"], ["reply", "Reply"], ["diff", "Diff"], ["raw", "Raw"]];
+function renderTabs(r) {
+  const id = r.id || S.lastEx;
+  const active = r.view === "tools" ? "tools" : r.view === "message" ? (r.which === "reply" ? "reply" : "request") : r.tab;
+  $("tabs").replaceChildren(
+    ...TABS.map(([tab, label]) => el("button", { class: "tab" + (active === tab ? " on" : ""), "data-tab": tab, disabled: id === null,
+      onclick: () => { S.lastTab = tab; go(hrefEx(id, tab)); } }, label)),
+    el("button", { class: "tab" + (active === "tools" ? " on" : ""), "data-tab": "tools", onclick: () => go("#/tools") }, "Tools"));
+}
+function renderStrip(x) {
+  if (!x) { $("strip").replaceChildren(); return; }
+  const u = usageOf(x), t = x.timing, tps = tokensPerSec(x);
+  const item = (label, value, target, cls) => el("button", { class: "stat", onclick: () => go(target), title: "Show the data behind this number" },
+    el("small", {}, label), el("b", { class: cls || "" }, value));
+  const req = hrefEx(x.id, "request"), rep = `#/exchange/${x.id}/message/reply`, raw = hrefEx(x.id, "raw");
+  $("strip").replaceChildren(
+    item("Input", num(u.input), req), item("Output", num(u.output), rep),
+    item("Cache read", num(u.read), req), item("Cache write", num(u.write), req),
+    item("Cache hit", pct(hitRatio(u)), req), item("Cost", usd(x.cost_usd), hrefEx(x.id, "reply")),
+    item("Total", ms(t.total_ms), raw), item("TTFB", ms(t.ttfb_ms), raw), item("TTFT", ms(t.ttft_ms), raw),
+    item("Output/s", tps === null ? "—" : tps.toFixed(1), rep));
+}
+function renderDetail() {
+  const r = route(), body = $("body");
+  const scrollKey = location.hash, keep = S.scrollKey === scrollKey ? body.scrollTop : 0;
+  S.scrollKey = scrollKey;
+  const x = r.id !== undefined ? S.ex.get(r.id) : null;
+  if (r.id !== undefined) { S.lastEx = r.id; }
+  if (r.view === "exchange") S.lastTab = r.tab;
+  renderTabs(r);
+  renderStrip(r.view === "exchange" || r.view === "message" ? x : null);
+  let content;
+  if (r.id !== undefined && !x) {
+    content = el("div", { class: "hint" }, S.synced ? `Exchange #${r.id} is not in the buffer (cleared, or older than the buffer holds).` : "Loading…");
+  } else if (r.view === "exchange") {
+    content = { request: renderRequest, reply: renderReply, diff: renderDiff, raw: renderRaw }[r.tab](x);
+  } else if (r.view === "message") {
+    content = renderMessage(x, r.which);
+  } else if (r.view === "tools") {
+    content = renderTools(r.name);
+  } else if (r.view === "stats") {
+    content = renderStats(r.metric);
+  } else {
+    content = el("div", { class: "hint" }, S.ex.size ? "Select an exchange on the left." : "Traffic appears on the left as soon as your agent sends a request.",
+      el("div", { class: "mono", style: "margin-top:8px" }, "Keys: j/k or ↑/↓ move · 1–4 tabs · 5 tools · / filter · p pause"));
+  }
+  body.className = r.view === "exchange" && r.tab === "request" ? "" : "no-index";
+  body.replaceChildren(...[content].flat(Infinity).filter(Boolean));
+  body.scrollTop = keep;
+  for (const row of S.rows.values()) row.node.classList.toggle("sel", Number(row.node.dataset.id) === r.id);
+}
+
+// ------------------------------------------------------------------ live updates
+function schedule() {
+  if (dirty.timer === null) dirty.timer = setTimeout(flush, 50);
+}
+function flush() {
+  dirty.timer = null;
+  for (const id of dirty.rows) { const x = S.ex.get(id); if (x) updateRow(x); }
+  dirty.rows.clear();
+  if (dirty.summary) { renderSummary(); dirty.summary = false; }
+  if (dirty.detail) {
+    // Replacing nodes would destroy a selection the reader is making; wait for it to end.
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed && $("body").contains(sel.anchorNode)) { dirty.timer = setTimeout(flush, 300); return; }
+    dirty.detail = false;
+    renderDetail();
+  }
+}
+function touch(id, detailToo) {
+  dirty.rows.add(id); dirty.summary = true;
+  const r = route();
+  if (r.id === id && detailToo !== false) dirty.detail = true;
+  schedule();
+}
+function touchTool(entry) {
+  const r = route();
+  if (r.view === "tools" || r.id === entry.call_exchange || r.id === entry.result_exchange) { dirty.detail = true; schedule(); }
+}
+function freshExchange(p) {
+  return { id: p.id, started_at: p.time, ended_at: null, method: p.method, path: p.path, status: null,
+    request_headers: p.headers, request_body: p.body, response_headers: {}, response_events: [], response_body: null,
+    assembled: { model: null, content: [], stop_reason: null, usage: {} },
+    timing: { ttfb_ms: null, ttft_ms: null, total_ms: null }, cost_usd: null, error: null,
+    view: p.view, conversation: p.conversation };
+}
+function applyPatch(x, patch) {
+  if (!patch) return;
+  const a = x.assembled;
+  for (const key of ["model", "stop_reason", "usage"]) if (patch[key] !== undefined) a[key] = patch[key];
+  if (patch.timing) x.timing = patch.timing;
+  for (const b of patch.blocks || []) {
+    while (a.content.length <= b.i) a.content.push({ type: "unknown" });
+    if (b.set) a.content[b.i] = b.set;
+    else a.content[b.i][b.field] = (a.content[b.i][b.field] || "") + b.append;
+  }
+  delete x._blob;
+}
+const HANDLERS = {
+  snapshot(list) {
+    S.ex.clear(); S.rows.forEach(r => r.node.remove()); S.rows.clear();
+    for (const x of list) S.ex.set(x.id, x);
+    $("list-empty").style.display = list.length ? "none" : "";
+    for (const x of [...S.ex.values()].sort((a, b) => a.id - b.id)) updateRow(x);
+    S.synced = true;
+    dirty.summary = dirty.detail = true; schedule();
+  },
+  tool_index(index) {
+    S.tools = new Map(Object.entries(index));
+    dirty.detail = true; schedule();
+  },
+  exchange_started(p) { S.ex.set(p.id, freshExchange(p)); touch(p.id); },
+  exchange_response(p) {
+    const x = S.ex.get(p.id); if (!x) return;
+    x.status = p.status; x.response_headers = p.headers; if (p.timing) x.timing = p.timing;
+    touch(p.id);
+  },
+  exchange_delta(p) {
+    const x = S.ex.get(p.id); if (!x) return;
+    x.response_events.push(p.event);
+    applyPatch(x, p.patch);
+    const r = route();
+    touch(p.id, r.view === "message" || r.tab === "reply" || r.tab === "raw");
+  },
+  exchange_done(p) {
+    const x = S.ex.get(p.id); if (!x) return;
+    Object.assign(x, { ended_at: p.ended_at, assembled: p.assembled, timing: p.timing, cost_usd: p.cost_usd, error: p.error,
+      response_body: p.response_body });
+    if (p.status !== undefined) x.status = p.status;
+    delete x._blob;
+    touch(p.id);
+  },
+  exchange_error(p) { const x = S.ex.get(p.id); if (x) { x.error = p.message; touch(p.id); } },
+  tool_update(p) { S.tools.set(p.tool_use_id, p.entry); touchTool(p.entry); },
+  tool_paired(p) { S.tools.set(p.tool_use_id, p.entry); touchTool(p.entry); },
+  exchange_evicted(p) {
+    S.ex.delete(p.id);
+    const r = S.rows.get(p.id); if (r) { r.node.remove(); S.rows.delete(p.id); }
+    for (const [tid, e] of S.tools) if ((e.result_exchange !== null ? e.result_exchange : e.call_exchange) === p.id) S.tools.delete(tid);
+    dirty.summary = dirty.detail = true; schedule();
+  },
+  cleared() {
+    S.ex.clear(); S.tools.clear(); S.rows.forEach(r => r.node.remove()); S.rows.clear();
+    S.pending = [];
+    $("list-empty").style.display = "";
+    dirty.summary = dirty.detail = true; schedule();
+    updatePause();
+  },
+};
+const PENDING_LIMIT = 20000;
+function receive(name, payload) {
+  if (name === "cleared" || !S.paused) { HANDLERS[name](payload); return; }
+  if (name === "snapshot") S.pending = [];  // a snapshot supersedes everything before it
+  S.pending.push([name, payload]);
+  if (S.pending.length > PENDING_LIMIT) { S.pending = []; S.resyncOnResume = true; }  // reload all on resume
+  updatePause();
+}
+function updatePause() {
+  $("pause").textContent = S.paused ? `Resume (${num(S.pending.length)} buffered)` : "Pause";
+}
+
+let source_es = null;
+function connect() {
+  if (source_es) source_es.close();
+  const es = source_es = new EventSource("/events");
+  es.onopen = () => { $("conn").textContent = "live"; $("conn").className = "live"; };
+  es.onerror = () => { $("conn").textContent = "reconnecting…"; $("conn").className = "reconnecting"; };
+  for (const name of Object.keys(HANDLERS)) {
+    es.addEventListener(name, ev => receive(name, JSON.parse(ev.data)));
+  }
+}
+
+// ------------------------------------------------------------------ top bar and keys
+$("pause").addEventListener("click", () => {
+  S.paused = !S.paused;
+  if (!S.paused) {
+    const queued = S.pending; S.pending = [];
+    for (const [name, payload] of queued) HANDLERS[name](payload);
+    if (S.resyncOnResume) { S.resyncOnResume = false; connect(); }
+  }
+  updatePause();
+});
+$("clear").addEventListener("click", () => fetch("/api/clear", { method: "POST" }));
+let filterTimer = null;
+$("filter").addEventListener("input", ev => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    S.filter = ev.target.value.trim().toLowerCase();
+    for (const x of S.ex.values()) updateRow(x);
+  }, 100);
+});
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("theme", theme); } catch (e) { /* preference only */ }
+}
+try { const saved = localStorage.getItem("theme"); if (saved) document.documentElement.dataset.theme = saved; } catch (e) { /* preference only */ }
+$("theme").addEventListener("click", () => {
+  const current = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  setTheme(current === "dark" ? "light" : "dark");
+});
+document.addEventListener("keydown", ev => {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.target.matches("input, textarea")) {
+    if (ev.key === "Escape") ev.target.blur();
+    return;
+  }
+  const r = route();
+  const move = delta => {
+    const rows = [...$("list").querySelectorAll(".row:not(.hide)")];
+    if (!rows.length) return;
+    const at = rows.findIndex(n => Number(n.dataset.id) === r.id);
+    const next = rows[Math.min(Math.max(at + delta, 0), rows.length - 1)];
+    go(hrefEx(next.dataset.id, S.lastTab));
+    next.scrollIntoView({ block: "nearest" });
+    ev.preventDefault();
+  };
+  if (ev.key === "j" || ev.key === "ArrowDown") move(1);
+  else if (ev.key === "k" || ev.key === "ArrowUp") move(-1);
+  else if (ev.key === "/") { ev.preventDefault(); $("filter").focus(); }
+  else if (ev.key === "p") $("pause").click();
+  else if (ev.key >= "1" && ev.key <= "4" && S.lastEx !== null) go(hrefEx(S.lastEx, TABS[Number(ev.key) - 1][0]));
+  else if (ev.key === "5") go("#/tools");
+});
+addEventListener("hashchange", renderDetail);
+
+renderSummary();
+renderDetail();
+connect();
+</script>
+</body>
+</html>
